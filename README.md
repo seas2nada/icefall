@@ -35,7 +35,16 @@ PW: if2022
 ```
 
 ### Install icefall
+```bash
+cd /path/to/icefall/tools
+. ./install_icefall.sh
+```
 
+### Check icefall installation
+```bash
+cd /path/to/icefall/tools
+. ./check_install.sh
+```
 
 ## Recipes
 
