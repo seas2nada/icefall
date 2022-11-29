@@ -14,10 +14,28 @@ You can try pre-trained models from within your browser without the need
 to download or install anything by visiting <https://huggingface.co/spaces/k2-fsa/automatic-speech-recognition>
 See <https://k2-fsa.github.io/icefall/huggingface/spaces.html> for more details.
 
-## Installation
+## Original Icefall Installation
 
 Please refer to <https://icefall.readthedocs.io/en/latest/installation/index.html>
 for installation.
+
+## HYnet ver. Icefall Installation
+
+### Install docker
+```bash
+cd /path/to/icefall/docker/HYnet_docker
+make _build
+make run
+```
+
+### Login to icefall docker
+```bash
+ssh icefall@localhost -p 32778
+PW: if2022
+```
+
+### Install icefall
+
 
 ## Recipes
 
