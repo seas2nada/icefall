@@ -4,13 +4,20 @@
 . ./activate_python.sh && conda install pytorch==1.12.0 torchvision==0.13.0 torchaudio==0.12.0 cudatoolkit=11.3 -c pytorch -c conda-forge
 
 # install k2
-conda install -c k2-fsa -c pytorch -c conda-forge k2 python=3.8 cudatoolkit=11.3 pytorch=1.12.0
+git clone https://github.com/k2-fsa/k2.git
+cd k2
+export K2_MAKE_ARGS="-j6"
+python3 setup.py install
 
 # install lhostse
+cd ../
 pip install git+https://github.com/lhotse-speech/lhotse
 
 # install icefall
 cd ../
 pip install -r requirements.txt
-export PYTHONPATH="$PYTHONPATH:$PWD"
+icefall_dir=$PWD
+echo 'export PYTHONPATH=$PYTHONPATH:'$icefall_dir >> ~/.bashrc
+echo 'export PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python' >> ~/.bashrc
+source ~/.bashrc
 conda install -c conda-forge gcc=12.1.0
