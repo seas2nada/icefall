@@ -46,6 +46,15 @@ cd /path/to/icefall/tools
 . ./check_install.sh
 ```
 
+### Install toolkits [optional for speech SSL models]
+```bash
+cd /path/to/icefall/tools
+. ./install_espnet.sh
+
+cd /path/to/icefall/tools
+. ./install_fairseq.sh
+```
+
 ## Recipes
 
 Please refer to <https://icefall.readthedocs.io/en/latest/recipes/index.html>
