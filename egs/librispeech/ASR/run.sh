@@ -37,5 +37,33 @@ if [ $stage -le 0 ] && [ $stop_stage -ge 0 ]; then
     --decoder-dim 512 \
     --joiner-dim 512  \
     --w2v-url "https://dl.fbaipublicfiles.com/fairseq/wav2vec/wav2vec_small.pt" \
-    --freeze-param "encoder.encoders.mask_emb" "encoder.encoders.feature_extractor" "encoder.encoders.post_extract_proj" "encoder.encoders.quantizer" "encoder.encoders.project_q"
+    --freeze-param "encoder.encoders.mask_emb" "encoder.encoders.feature_extractor" "encoder.encoders.post_extract_proj" "encoder.encoders.quantizer" "encoder.encoders.project_q" \
+    --lr-batches 50000 \
+    --lr-epochs 10
+fi
+
+if [ $stage -le 1 ] && [ $stop_stage -ge 1 ]; then
+  log "Stage 1: Decoding"
+  decoding_method="greedy_search"  # "fast_beam_search", "modified_beam_search"
+
+  for chunk in 16; do
+    for left in 64; do
+      ./pruned_transducer_stateless_w2v/decode.py \
+              --decode-chunk-size ${chunk} \
+              --left-context ${left} \
+              --causal-convolution 1 \
+              --input-strategy AudioSamples \
+              --epoch 25 \
+              --avg 3 \
+              --exp-dir ./pruned_transducer_stateless_w2v/exp \
+              --max-sym-per-frame 1 \
+              --max-duration 1000 \
+              --decoding-method ${decoding_method} \
+              --encoder-type w2v \
+              --w2v-url "https://dl.fbaipublicfiles.com/fairseq/wav2vec/wav2vec_small.pt" \
+              --encoder-dim 768 \
+              --decoder-dim 512 \
+              --joiner-dim 512
+    done
+  done
 fi

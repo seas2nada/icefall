@@ -198,7 +198,13 @@ def add_model_arguments(parser: argparse.ArgumentParser):
         type=str,
         default=["encoder.encoders.feature_extractor.conv_layers"],
         nargs="*",
-        help="Freeze parameters",
+        help="freeze parameters",
+    )
+    parser.add_argument(
+        "--freeze-finetune-updates",
+        type=int,
+        default=0,
+        help="freeze wav2vec parameter steps",
     )
 
 
@@ -481,6 +487,7 @@ def get_encoder_model(params: AttributeDict) -> nn.Module:
                 w2v_url=params.w2v_url,
                 w2v_dir_path=params.w2v_dir_path,
                 output_size=params.encoder_dim,
+                freeze_finetune_updates=params.freeze_finetune_updates,
             )
     elif params.encoder_type == 'conformer':
         encoder = Conformer(
