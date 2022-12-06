@@ -38,6 +38,7 @@ if [ $stage -le 0 ] && [ $stop_stage -ge 0 ]; then
     --joiner-dim 512  \
     --w2v-url "https://dl.fbaipublicfiles.com/fairseq/wav2vec/wav2vec_small.pt" \
     --freeze-param "encoder.encoders.mask_emb" "encoder.encoders.feature_extractor" "encoder.encoders.post_extract_proj" "encoder.encoders.quantizer" "encoder.encoders.project_q" \
+    --initial-lr 0.0003 \
     --lr-batches 50000 \
     --lr-epochs 10
 fi
