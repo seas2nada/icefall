@@ -80,6 +80,7 @@ class Transducer(nn.Module):
         warmup: float = 1.0,
         reduction: str = "sum",
         delay_penalty: float = 0.0,
+        print_tensor: bool = False,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Args:
@@ -130,6 +131,9 @@ class Transducer(nn.Module):
         assert x.size(0) == x_lens.size(0) == y.dim0
 
         encoder_out, x_lens = self.encoder(x, x_lens, warmup=warmup)
+
+        #encoder_out *= 100
+
         assert torch.all(x_lens > 0)
 
         # Now for the decoder, i.e., the prediction network
@@ -144,7 +148,7 @@ class Transducer(nn.Module):
 
         # decoder_out: [B, S + 1, decoder_dim]
         decoder_out = self.decoder(sos_y_padded)
-
+        
         # Note: y does not start with SOS
         # y_padded : [B, S]
         y_padded = y.pad(mode="constant", padding_value=0)
@@ -156,6 +160,24 @@ class Transducer(nn.Module):
 
         lm = self.simple_lm_proj(decoder_out)
         am = self.simple_am_proj(encoder_out)
+        
+        if encoder_out.get_device() == 0 and 0:
+            print('encoder out = ', encoder_out)
+            print('encoder size = ', encoder_out.size())
+            
+            print('am = ', am)
+            print('am size = ', am.size())
+
+            print('sos y padded = ', sos_y_padded)
+            print('sos y padded size = ', sos_y_padded.size())
+
+            print('decoder out = ', decoder_out)
+            print('decoder size = ', decoder_out.size())
+            
+            print('lm = ', lm)
+            print('lm size = ', lm.size())
+
+            print('\n\n\n\n\n')
 
         with torch.cuda.amp.autocast(enabled=False):
             simple_loss, (px_grad, py_grad) = k2.rnnt_loss_smoothed(
@@ -170,6 +192,9 @@ class Transducer(nn.Module):
                 delay_penalty=delay_penalty,
                 return_grad=True,
             )
+            #print('1. simple loss = ', simple_loss)
+            #print('2. px_grad = ', px_grad)
+            #print('3. py_grad = ', py_grad)
 
         # ranges : [B, T, prune_range]
         ranges = k2.get_rnnt_prune_ranges(
@@ -192,7 +217,7 @@ class Transducer(nn.Module):
         # project_input=False since we applied the decoder's input projections
         # prior to do_rnnt_pruning (this is an optimization for speed).
         logits = self.joiner(am_pruned, lm_pruned, project_input=False)
-
+        
         with torch.cuda.amp.autocast(enabled=False):
             pruned_loss = k2.rnnt_loss_pruned(
                 logits=logits.float(),
@@ -205,3 +230,51 @@ class Transducer(nn.Module):
             )
 
         return (simple_loss, pruned_loss)
+    
+    def decode(
+        self,
+        x: torch.Tensor,
+        x_lens: torch.Tensor,
+        y: k2.RaggedTensor,
+        sp,
+    ): 
+        from beam_search import greedy_search_batch, greedy_search_batch_target_input
+
+        assert x.size(0) == x_lens.size(0) == y.dim0
+
+        encoder_out, x_lens = self.encoder(x, x_lens)
+
+        assert torch.all(x_lens > 0)
+        
+        '''
+        # Now for the decoder, i.e., the prediction network
+        row_splits = y.shape.row_splits(1)
+        y_lens = row_splits[1:] - row_splits[:-1]
+
+        blank_id = self.decoder.blank_id
+        sos_y = add_sos(y, sos_id=blank_id)
+
+        # sos_y_padded: [B, S + 1], start with SOS.
+        sos_y_padded = sos_y.pad(mode="constant", padding_value=blank_id)
+
+        # decoder_out: [B, S + 1, decoder_dim]
+        decoder_out = self.decoder(sos_y_padded)
+        
+        # Note: y does not start with SOS
+        # y_padded : [B, S]
+        y_padded = y.pad(mode="constant", padding_value=0)
+
+        y_padded = y_padded.to(torch.int64)
+        boundary = torch.zeros((x.size(0), 4), dtype=torch.int64, device=x.device)
+        boundary[:, 2] = y_lens
+        boundary[:, 3] = x_lens
+        '''
+
+        hyps = []
+        #hyp_tokens = greedy_search_batch_target_input(self, encoder_out, x_lens, decoder_out)
+        hyp_tokens = greedy_search_batch(self, encoder_out, x_lens)#, decoder_out)
+
+        for hyp in sp.decode(hyp_tokens):
+            hyps.append(hyp.split())
+        
+        return hyps

@@ -453,13 +453,22 @@ def decode_one_batch(
     """
     device = next(model.parameters()).device
     feature = batch["inputs"]
-    assert feature.ndim == 3
+    assert feature.ndim == 2, feature.ndim == 3
 
     feature = feature.to(device)
     # at entry, feature is (N, T, C)
 
     supervisions = batch["supervisions"]
-    feature_lens = supervisions["num_frames"].to(device)
+
+    if feature.ndim == 2:
+        feature_lens = [] 
+        for supervision in supervisions['cut']:
+            try: feature_lens.append(supervision.tracks[0].cut.recording.num_samples)
+            except: feature_lens.append(supervision.recording.num_samples)
+        feature_lens = torch.tensor(feature_lens).to(device)
+    
+    elif feature.ndim == 3:
+        feature_lens = supervisions["num_frames"].to(device)
 
     if params.simulate_streaming:
         feature_lens += params.left_context
@@ -550,6 +559,11 @@ def decode_one_batch(
         )
         for hyp in sp.decode(hyp_tokens):
             hyps.append(hyp.split())
+
+        texts = supervisions["text"]
+        #for enum, text in enumerate(texts):
+        logging.info(f"ref: {texts[0]}")
+        logging.info(f"hyp: {' '.join(hyps[0])}")
     elif params.decoding_method == "modified_beam_search":
         hyp_tokens = modified_beam_search(
             model=model,
@@ -595,7 +609,7 @@ def decode_one_batch(
                     f"Unsupported decoding method: {params.decoding_method}"
                 )
             hyps.append(sp.decode(hyp).split())
-
+    
     if params.decoding_method == "greedy_search":
         return {"greedy_search": hyps}
     elif "fast_beam_search" in params.decoding_method:
@@ -661,6 +675,8 @@ def decode_dataset(
 
     results = defaultdict(list)
     for batch_idx, batch in enumerate(dl):
+        if batch_idx > 10:
+            break
         texts = batch["supervisions"]["text"]
         cut_ids = [cut.id for cut in batch["supervisions"]["cut"]]
         logging.info(f"Decoding {batch_idx}-th batch")
@@ -940,7 +956,10 @@ def main():
 
     test_clean_cuts = librispeech.test_clean_cuts()
     test_other_cuts = librispeech.test_other_cuts()
-
+    #test_clean_cuts = librispeech.train_clean_100_cuts()
+    #test_other_cuts = librispeech.train_clean_100_cuts()
+    
+    #test_clean_dl = librispeech.train_dataloaders(test_clean_cuts)
     test_clean_dl = librispeech.test_dataloaders(test_clean_cuts)
     test_other_dl = librispeech.test_dataloaders(test_other_cuts)
 

@@ -67,20 +67,17 @@ from lhotse.cut import Cut
 from lhotse.dataset.sampling.base import CutSampler
 from lhotse.utils import fix_random_seed
 from model import Transducer
-from optim import Eden, Eve, TriStageLRScheduler
+from optim import Eden, Eve
 from torch import Tensor
 from torch.cuda.amp import GradScaler
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.tensorboard import SummaryWriter
 
 from icefall import diagnostics
-from icefall.checkpoint import remove_checkpoints
-from checkpoint import (
-    save_checkpoint as save_checkpoint_impl,
-    save_checkpoint_with_global_batch_idx,
-    load_checkpoint
-)
+from icefall.checkpoint import load_checkpoint, remove_checkpoints
+from icefall.checkpoint import save_checkpoint as save_checkpoint_impl
 from icefall.checkpoint import (
+    save_checkpoint_with_global_batch_idx,
     update_averaged_model,
 )
 from icefall.dist import cleanup_dist, setup_dist
@@ -196,23 +193,10 @@ def add_model_arguments(parser: argparse.ArgumentParser):
     )
 
 
+
 def get_parser():
     parser = argparse.ArgumentParser(
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
-    )
-    
-    parser.add_argument(
-        "--accum-grad",
-        type=int,
-        default=1,
-        help="accum-grad num.",
-    )
-    
-    parser.add_argument(
-        "--multi-optim",
-        type=bool,
-        default=False,
-        help="use sperate optimizer (enc / dec)",
     )
 
     parser.add_argument(
@@ -285,21 +269,6 @@ def get_parser():
         default=0.003,
         help="The initial learning rate.  This value should not need to be changed.",
     )
-
-    parser.add_argument(
-        "--initial-enc-lr",
-        type=float,
-        default=0.0003,
-        help="The initial learning rate.  This value should not need to be changed.",
-    )
-    
-    parser.add_argument(
-        "--initial-dec-lr",
-        type=float,
-        default=0.001,
-        help="The initial learning rate.  This value should not need to be changed.",
-    )
-
 
     parser.add_argument(
         "--lr-batches",
@@ -587,8 +556,8 @@ def load_checkpoint_if_available(
     params: AttributeDict,
     model: nn.Module,
     model_avg: nn.Module = None,
-    optimizer = None,
-    scheduler = None,
+    optimizer: Optional[torch.optim.Optimizer] = None,
+    scheduler: Optional[LRSchedulerType] = None,
 ) -> Optional[Dict[str, Any]]:
     """Load checkpoint from file.
 
@@ -653,8 +622,8 @@ def save_checkpoint(
     params: AttributeDict,
     model: Union[nn.Module, DDP],
     model_avg: Optional[nn.Module] = None,
-    optimizer = None,
-    scheduler = None,
+    optimizer: Optional[torch.optim.Optimizer] = None,
+    scheduler: Optional[LRSchedulerType] = None,
     sampler: Optional[CutSampler] = None,
     scaler: Optional[GradScaler] = None,
     rank: int = 0,
@@ -740,7 +709,6 @@ def compute_loss(
             try: feature_lens.append(supervision.tracks[0].cut.recording.num_samples)
             except: feature_lens.append(supervision.recording.num_samples)
         feature_lens = torch.tensor(feature_lens)
-    
     elif feature.ndim == 3:
         feature_lens = supervisions["num_frames"].to(device)
 
@@ -781,10 +749,9 @@ def compute_loss(
                     "There are too many utterances in this batch "
                     "leading to inf or nan losses."
                 )
-        
+
         simple_loss = simple_loss.sum()
         pruned_loss = pruned_loss.sum()
-
         # after the main warmup step, we keep pruned_loss_scale small
         # for the same amount of time (model_warm_step), to avoid
         # overwhelming the simple_loss and causing it to diverge,
@@ -816,8 +783,7 @@ def compute_loss(
         # (1) The acutal subsampling factor is ((lens - 1) // 2 - 1) // 2
         # (2) If some utterances in the batch lead to inf/nan loss, they
         #     are filtered out.
-        #info["frames"] = (feature_lens // params.subsampling_factor).sum().item()
-        info["frames"] = feature_lens.sum().item()
+        info["frames"] = (feature_lens // params.subsampling_factor).sum().item()
 
     # `utt_duration` and `utt_pad_proportion` would be normalized by `utterances`  # noqa
     info["utterances"] = feature.size(0)
@@ -873,8 +839,8 @@ def compute_validation_loss(
 def train_one_epoch(
     params: AttributeDict,
     model: Union[nn.Module, DDP],
-    optimizer,
-    scheduler,
+    optimizer: torch.optim.Optimizer,
+    scheduler: LRSchedulerType,
     sp: spm.SentencePieceProcessor,
     train_dl: torch.utils.data.DataLoader,
     valid_dl: torch.utils.data.DataLoader,
@@ -918,10 +884,6 @@ def train_one_epoch(
     model.train()
 
     tot_loss = MetricsTracker()
-    
-    if params.multi_optim:
-        optimizer_enc, optimizer_dec = optimizer[0], optimizer[1]
-        scheduler_enc, scheduler_dec = scheduler[0], scheduler[1]
 
     for batch_idx, batch in enumerate(train_dl):
         params.batch_idx_train += 1
@@ -936,7 +898,7 @@ def train_one_epoch(
                     batch=batch,
                     is_training=True,
                     warmup=(params.batch_idx_train / params.model_warm_step),
-                    decode=True if batch_idx % 100 == 0 else False,
+                    decode=True if batch_idx % 50 == 0 else False,
                 )
             # summary stats
             tot_loss = (tot_loss * (1 - 1 / params.reset_interval)) + loss_info
@@ -944,20 +906,10 @@ def train_one_epoch(
             # NOTE: We use reduction==sum and loss is computed over utterances
             # in the batch and there is no normalization to it so far.
             scaler.scale(loss).backward()
-            if params.multi_optim:
-                scheduler_enc.step_batch(params.batch_idx_train)
-                scheduler_dec.step_batch(params.batch_idx_train)
-                scaler.step(optimizer_enc)
-                scaler.step(optimizer_dec)
-                scaler.update()
-                optimizer_enc.zero_grad()
-                optimizer_dec.zero_grad()
-            else:
-                scheduler.step_batch(params.batch_idx_train)
-                scaler.step(optimizer)
-                scaler.update()
-                optimizer.zero_grad()
-
+            scheduler.step_batch(params.batch_idx_train)
+            scaler.step(optimizer)
+            scaler.update()
+            optimizer.zero_grad()
         except:  # noqa
             display_and_save_batch(batch, params=params, sp=sp)
             raise
@@ -999,8 +951,7 @@ def train_one_epoch(
             )
 
         if batch_idx % params.log_interval == 0:
-            try: cur_lr = scheduler_enc.get_last_lr()[0]
-            except: cur_lr = scheduler.get_last_lr()[0]
+            cur_lr = scheduler.get_last_lr()[0]
             logging.info(
                 f"Epoch {params.cur_epoch}, "
                 f"batch {batch_idx}, loss[{loss_info}], "
@@ -1111,67 +1062,13 @@ def run(rank, world_size, args):
         logging.info("Using DDP")
         model = DDP(model, device_ids=[rank], find_unused_parameters=True)
 
-    if params.multi_optim:
-        enc_param = []
-        dec_param = []
-        for n, p in model.named_parameters():
-            name = n.split('.')[1]
-            if name == 'encoder' and 'feature_extractor' not in n:
-                print(n)
-                enc_param.append(p)
-            elif 'feature_extractor' not in n:
-                dec_param.append(p)
+    optimizer = Eve(model.parameters(), lr=params.initial_lr)
 
-        optimizer_enc = Eve(enc_param, lr=params.initial_enc_lr)
-        optimizer_dec = Eve(dec_param, lr=params.initial_dec_lr)
+    scheduler = Eden(optimizer, params.lr_batches, params.lr_epochs)
 
-        #scheduler_enc = Eden(optimizer_enc, params.lr_batches, params.lr_epochs)
-        #scheduler_dec = Eden(optimizer_dec, params.lr_batches, params.lr_epochs)
-        total_steps_factor = 33/8 if params.full_libri else 3/8
-
-        total_steps = int(total_steps_factor*params.world_size*params.max_duration*params.num_epochs)
-        scheduler_enc = TriStageLRScheduler(optimizer_enc,
-                                    init_lr=1e-05,
-                                    peak_lr=params.initial_enc_lr,
-                                    final_lr=1e-05,
-                                    init_lr_scale=0.02,
-                                    final_lr_scale=0.02,
-                                    warmup_steps=int(total_steps*0.1),
-                                    hold_steps=int(total_steps*0.4),
-                                    decay_steps=int(total_steps*0.5),
-                                    total_steps=total_steps,
-                                    verbose=False,
-                                )
-
-        scheduler_dec = TriStageLRScheduler(optimizer_enc,
-                                    init_lr=1e-05,
-                                    peak_lr=params.initial_dec_lr,
-                                    final_lr=1e-05,
-                                    init_lr_scale=0.02,
-                                    final_lr_scale=0.02,
-                                    warmup_steps=int(total_steps*0.1),
-                                    hold_steps=int(total_steps*0.4),
-                                    decay_steps=int(total_steps*0.5),
-                                    total_steps=total_steps,
-                                    verbose=False,
-                                )
-
-        optimizer = [optimizer_enc, optimizer_dec]
-        scheduler = [scheduler_enc, scheduler_dec]
-    
-    else:
-        optimizer = Eve(model.parameters(), lr=params.initial_lr)
-        scheduler = Eden(optimizer, params.lr_batches, params.lr_epochs)
-
-    if checkpoints and ("optimizer" in checkpoints or "optimizer_enc" in checkpoints):
-        if params.multi_optim:
-            logging.info("Loading optimizer state dict")
-            optimizer_enc.load_state_dict(checkpoints["optimizer_enc"])
-            optimizer_dec.load_state_dict(checkpoints["optimizer_dec"])
-        
-        else:
-            logging.info("Loading optimizer state dict")
-            optimizer.load_state_dict(checkpoints["optimizer"])
+    if checkpoints and "optimizer" in checkpoints:
+        logging.info("Loading optimizer state dict")
+        optimizer.load_state_dict(checkpoints["optimizer"])
 
     if (
         checkpoints
@@ -1179,12 +1076,8 @@ def run(rank, world_size, args):
         and checkpoints["scheduler"] is not None
     ):
         logging.info("Loading scheduler state dict")
-        if params.multi_optim:
-            scheduler_enc.load_state_dict(checkpoints["scheduler_enc"])
-            scheduler_dec.load_state_dict(checkpoints["scheduler_dec"])
-        else:
-            scheduler.load_state_dict(checkpoints["scheduler"])
-    
+        scheduler.load_state_dict(checkpoints["scheduler"])
+
     if params.print_diagnostics:
         opts = diagnostics.TensorDiagnosticOptions(
             2**22
@@ -1269,12 +1162,7 @@ def run(rank, world_size, args):
         scaler.load_state_dict(checkpoints["grad_scaler"])
 
     for epoch in range(params.start_epoch, params.num_epochs + 1):
-        if params.multi_optim:
-            #scheduler_enc.step_epoch(epoch - 1)
-            scheduler_dec.step_epoch(epoch - 1)
-        else:
-            scheduler.step_epoch(epoch - 1)
-
+        scheduler.step_epoch(epoch - 1)
         fix_random_seed(params.seed + epoch - 1)
         train_dl.sampler.set_epoch(epoch - 1)
 
