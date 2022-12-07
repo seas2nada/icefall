@@ -208,13 +208,7 @@ def get_parser():
         help="accum-grad num.",
     )
     
-    parser.add_argument(
-        "--multi-optim",
-        type=bool,
-        default=False,
-        help="use sperate optimizer (enc / dec)",
-    )
-
+    
     parser.add_argument(
         "--world-size",
         type=int,
@@ -287,16 +281,16 @@ def get_parser():
     )
 
     parser.add_argument(
-        "--initial-enc-lr",
+        "--peak-enc-lr",
         type=float,
-        default=0.0003,
+        default=0.00005,
         help="The initial learning rate.  This value should not need to be changed.",
     )
     
     parser.add_argument(
-        "--initial-dec-lr",
+        "--peak-dec-lr",
         type=float,
-        default=0.001,
+        default=0.00005,
         help="The initial learning rate.  This value should not need to be changed.",
     )
 
@@ -424,6 +418,13 @@ def get_parser():
         See https://github.com/k2-fsa/k2/issues/955 and
         https://arxiv.org/pdf/2211.00490.pdf for more details.""",
     )
+    
+    parser.add_argument(
+        "--multi-optim",
+        type=bool,
+        default=False,
+        help="use sperate optimizer (enc / dec)",
+    )
 
     parser.add_argument(
         "--decoding-method",
@@ -508,7 +509,8 @@ def get_params() -> AttributeDict:
             "feature_dim": 80,
             "subsampling_factor": 4,
             # parameters for Noam
-            "model_warm_step": 3000,  # arg given to model, not for lrate
+            "model_warm_step": 1,  # arg given to model, not for lrate
+            #"model_warm_step": 3000,  # arg given to model, not for lrate
             #"model_warm_step": 200,  # arg given to model, not for lrate
             "env_info": get_env_info(),
         }
@@ -1122,18 +1124,22 @@ def run(rank, world_size, args):
             elif 'feature_extractor' not in n:
                 dec_param.append(p)
 
-        optimizer_enc = Eve(enc_param, lr=params.initial_enc_lr)
-        optimizer_dec = Eve(dec_param, lr=params.initial_dec_lr)
+        optimizer_enc = Eve(enc_param, lr=params.peak_enc_lr)
+        optimizer_dec = Eve(dec_param, lr=params.peak_dec_lr)
 
         #scheduler_enc = Eden(optimizer_enc, params.lr_batches, params.lr_epochs)
         #scheduler_dec = Eden(optimizer_dec, params.lr_batches, params.lr_epochs)
-        total_steps_factor = 33/8 if params.full_libri else 3/8
+        ## 1600 batch -> 700 updates
+        batch_durations = params.world_size * params.max_duration
+        total_steps = int(6600*1600*params.num_epochs/batch_durations) if params.full_libri \
+                    else int(700*1600*params.num_epochs/batch_durations)
 
-        total_steps = int(total_steps_factor*params.world_size*params.max_duration*params.num_epochs)
+        logging.info(f"tri-stage scheduler... ({int(0.1*total_steps)}, {int(0.4*total_steps)}, {int(0.5*total_steps)})")
+
         scheduler_enc = TriStageLRScheduler(optimizer_enc,
                                     init_lr=1e-05,
-                                    peak_lr=params.initial_enc_lr,
-                                    final_lr=1e-05,
+                                    peak_lr=params.peak_enc_lr,
+                                    final_lr=5e-06,
                                     init_lr_scale=0.02,
                                     final_lr_scale=0.02,
                                     warmup_steps=int(total_steps*0.1),
@@ -1142,10 +1148,11 @@ def run(rank, world_size, args):
                                     total_steps=total_steps,
                                     verbose=False,
                                 )
-
+        
+        '''
         scheduler_dec = TriStageLRScheduler(optimizer_enc,
                                     init_lr=1e-05,
-                                    peak_lr=params.initial_dec_lr,
+                                    peak_lr=params.peak_dec_lr,
                                     final_lr=1e-05,
                                     init_lr_scale=0.02,
                                     final_lr_scale=0.02,
@@ -1155,7 +1162,8 @@ def run(rank, world_size, args):
                                     total_steps=total_steps,
                                     verbose=False,
                                 )
-
+        '''
+        scheduler_dec = Eden(optimizer_dec, params.lr_batches, params.lr_epochs)
         optimizer = [optimizer_enc, optimizer_dec]
         scheduler = [scheduler_enc, scheduler_dec]
     
