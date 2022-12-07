@@ -3,6 +3,7 @@
 
 """Encoder definition."""
 import contextlib
+import time
 import copy
 import math 
 import logging
@@ -13,9 +14,6 @@ import warnings
 import torch
 from filelock import FileLock
 from typeguard import check_argument_types
-
-#from espnet2.asr.encoder.abs_encoder import AbsEncoder
-#from espnet.nets.pytorch_backend.transformer.layer_norm import LayerNorm
 
 from nets_utils import make_pad_mask
 from encoder_interface import EncoderInterface
@@ -52,6 +50,7 @@ class FairSeqData2VecEncoder(EncoderInterface):
         w2v_dir_path: str = "./",
         output_size: int = 256,
         freeze_finetune_updates: int = 0,
+        additional_block: bool = False,
     ):
         assert check_argument_types()
         super().__init__()
@@ -69,15 +68,17 @@ class FairSeqData2VecEncoder(EncoderInterface):
 
         if os.path.exists('/home/work/workspace/models/data2vec_model/audio_base_ls.pt'):
             self.w2v_model_path = '/home/work/workspace/models/data2vec_model/audio_base_ls.pt'
+        if os.path.exists('./models/audio_base_ls.pt'):
+            self.w2v_model_path = './models/audio_base_ls.pt'
 
         self._output_size = output_size
 
         models, _, _ = fairseq.checkpoint_utils.load_model_ensemble_and_task(
             [self.w2v_model_path],
-            #arg_overrides={"data": w2v_dir_path},
             strict=False,
         )
         model = models[0]
+        model.feature_grad_mult = 0.0 ## for conv network freeze
         
         if not isinstance(model, Wav2Vec2Model):
             try:
@@ -91,28 +92,31 @@ class FairSeqData2VecEncoder(EncoderInterface):
         self.encoders = model
         self.pretrained_params = copy.deepcopy(model.state_dict())
 
-        if model.cfg.encoder_embed_dim != output_size:
+        if model.cfg.encoder_embed_dim != output_size or additional_block:
             # TODO(xkc09): try LSTM
             self.output_layer = torch.nn.Sequential(
                 torch.nn.Linear(model.cfg.encoder_embed_dim, output_size),
+                torch.nn.LayerNorm(output_size),
+                torch.nn.GELU(),
             )
         else:
             self.output_layer = None
 
         self.freeze_finetune_updates = freeze_finetune_updates
         self.num_updates = 0
-        #self.register_buffer("num_updates", torch.LongTensor([0]))
 
     def output_size(self) -> int:
         return self._output_size
 
     def forward(
         self,
-        xs_pad: torch.Tensor,
-        ilens: torch.Tensor,
+        x: torch.Tensor,
+        x_lens: torch.Tensor,
         warmup = None,
         prev_states: torch.Tensor = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
+        xs_pad = x
+        ilens = x_lens
         """Forward FairSeqWav2Vec2 Encoder.
 
         Args:
@@ -122,26 +126,23 @@ class FairSeqData2VecEncoder(EncoderInterface):
         Returns:
             position embedded tensor and mask
         """
-        #print(xs_pad.size())
-        #if xs_pad.dim() == 2:
-        #    xs_pad = xs_pad.mean(-1)
         with torch.no_grad():
             xs_pad = torch.nn.functional.layer_norm(xs_pad, xs_pad.shape)
-        #print(xs_pad.size())
 
         masks = make_pad_mask(ilens).to(xs_pad.device)
 
-        ft = self.freeze_finetune_updates <= self.num_updates
+        ft = (self.freeze_finetune_updates <= self.num_updates) and self.encoders.training
         if self.num_updates <= self.freeze_finetune_updates:
             self.num_updates += 1
         elif ft and self.num_updates == self.freeze_finetune_updates + 1:
             self.num_updates += 1
             logging.info("Start fine-tuning wav2vec parameters!")
-
+        
         with torch.no_grad() if not ft else contextlib.nullcontext():
             enc_outputs = self.encoders(
                 xs_pad,
                 masks,
+                mask = ft,
                 features_only=True,
             )
 
@@ -185,11 +186,11 @@ def download_w2v(model_url, dir_path):
 
 if __name__ == '__main__':
     d2v = FairSeqData2VecEncoder(input_size=768, w2v_url='ww', output_size=768)
-    inputs = torch.randn([3, 14000])
+    inputs = torch.randn([1, 211564])
     #a = torch.ones([1000]
     #b = torch.ones([10000])
     #c = torch.ones([10000])
-    length = torch.tensor([1000, 1200, 1000])
+    length = torch.tensor([211564])
     outputs = d2v(inputs, length)
     print(outputs[0].size())
 

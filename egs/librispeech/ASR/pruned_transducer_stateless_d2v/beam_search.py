@@ -627,14 +627,14 @@ def greedy_search_batch(
     """
     assert encoder_out.ndim == 3
     assert encoder_out.size(0) >= 1, encoder_out.size(0)
-
+    
     packed_encoder_out = torch.nn.utils.rnn.pack_padded_sequence(
         input=encoder_out,
         lengths=encoder_out_lens.cpu(),
         batch_first=True,
         enforce_sorted=False,
     )
-
+    
     device = next(model.parameters()).device
 
     blank_id = model.decoder.blank_id
@@ -661,13 +661,14 @@ def greedy_search_batch(
     decoder_out = model.decoder(decoder_input, need_pad=False)
     decoder_out = model.joiner.decoder_proj(decoder_out)
     # decoder_out: (N, 1, decoder_out_dim)
-
+    
     encoder_out = model.joiner.encoder_proj(packed_encoder_out.data)
 
     offset = 0
     for (t, batch_size) in enumerate(batch_size_list):
         start = offset
         end = offset + batch_size
+
         current_encoder_out = encoder_out.data[start:end]
         current_encoder_out = current_encoder_out.unsqueeze(1).unsqueeze(1)
         # current_encoder_out's shape: (batch_size, 1, 1, encoder_out_dim)
@@ -679,8 +680,8 @@ def greedy_search_batch(
             current_encoder_out, decoder_out.unsqueeze(1), project_input=False
         )
         # logits'shape (batch_size, 1, 1, vocab_size)
-
         logits = logits.squeeze(1).squeeze(1)  # (batch_size, vocab_size)
+
         assert logits.ndim == 2, logits.shape
         y = logits.argmax(dim=1).tolist()
         emitted = False
@@ -716,6 +717,149 @@ def greedy_search_batch(
             timestamps=ans_timestamps,
         )
 
+
+def greedy_search_batch_target_input(
+    model: Transducer,
+    encoder_out: torch.Tensor,
+    encoder_out_lens: torch.Tensor,
+    decoder_out: torch.Tensor,
+    return_timestamps: bool = False,
+) -> Union[List[List[int]], DecodingResults]:
+    """Greedy search in batch mode. It hardcodes --max-sym-per-frame=1.
+    Args:
+      model:
+        The transducer model.
+      encoder_out:
+        Output from the encoder. Its shape is (N, T, C), where N >= 1.
+      encoder_out_lens:
+        A 1-D tensor of shape (N,), containing number of valid frames in
+        encoder_out before padding.
+      return_timestamps:
+        Whether to return timestamps.
+    Returns:
+      If return_timestamps is False, return the decoded result.
+      Else, return a DecodingResults object containing
+      decoded result and corresponding timestamps.
+    """
+    assert encoder_out.ndim == 3
+    assert encoder_out.size(0) >= 1, encoder_out.size(0)
+    
+    if 0:
+        print('1. encoder out size = ', encoder_out.size())
+
+    packed_encoder_out = torch.nn.utils.rnn.pack_padded_sequence(
+        input=encoder_out,
+        lengths=encoder_out_lens.cpu(),
+        batch_first=True,
+        enforce_sorted=False,
+    )
+    
+    if 0:
+        print('2. encoder out size = ', encoder_out.size())
+    
+    device = next(model.parameters()).device
+
+    blank_id = model.decoder.blank_id
+    unk_id = getattr(model, "unk_id", blank_id)
+    context_size = model.decoder.context_size
+
+    batch_size_list = packed_encoder_out.batch_sizes.tolist()
+    N = encoder_out.size(0)
+    assert torch.all(encoder_out_lens > 0), encoder_out_lens
+    assert N == batch_size_list[0], (N, batch_size_list)
+
+    hyps = [[-1] * (context_size - 1) + [blank_id] for _ in range(N)]
+
+    # timestamp[n][i] is the frame index after subsampling
+    # on which hyp[n][i] is decoded
+    timestamps = [[] for _ in range(N)]
+    
+    '''
+    decoder_input = torch.tensor(
+        hyps,
+        device=device,
+        dtype=torch.int64,
+    )  # (N, context_size)
+
+    decoder_out = model.decoder(decoder_input, need_pad=False)
+    '''
+    decoder_out = model.joiner.decoder_proj(decoder_out)
+    # decoder_out: (N, 1, decoder_out_dim)
+    
+    if 0:
+        print('3. decoder out size = ', decoder_out.size())
+
+    encoder_out = model.joiner.encoder_proj(packed_encoder_out.data)
+
+    if 0:
+        print('4. encoder out size = ', encoder_out.size())
+        print('5. batch size list = ', batch_size_list)
+        print('5-1. batch size list len = ', len(batch_size_list))
+
+    offset = 0
+    decoder_idx = 0
+    for (t, batch_size) in enumerate(batch_size_list):
+        start = offset
+        end = offset + batch_size
+
+        #print('6. start, end = ', start, end)
+        current_encoder_out = encoder_out.data[start:end]
+        current_encoder_out = current_encoder_out.unsqueeze(1).unsqueeze(1)
+        # current_encoder_out's shape: (batch_size, 1, 1, encoder_out_dim)
+        #print('7. current_encoder_out size = ', current_encoder_out.size())
+        offset = end
+
+        #print('8-1. decoder_out size = ', decoder_out.size())
+        decoder_out = decoder_out[:batch_size, decoder_idx:decoder_idx+1, :]
+        #print('8-2. decoder_out size = ', decoder_out.size())
+
+        logits = model.joiner(
+            current_encoder_out, decoder_out.unsqueeze(1), project_input=False
+        )
+        # logits'shape (batch_size, 1, 1, vocab_size)
+        logits = logits.squeeze(1).squeeze(1)  # (batch_size, vocab_size)
+        softmax = torch.nn.Softmax(dim=-1)
+        logits = softmax(logits) 
+        #print('7. logit = ', logits[0])
+        #print('8. logit size = ', logits.size())
+
+        assert logits.ndim == 2, logits.shape
+        y = logits.argmax(dim=1).tolist()
+        #print('9. y = ', y)
+        #print('\n'*4)
+        emitted = False
+        for i, v in enumerate(y):
+            if v not in (blank_id, unk_id):
+                hyps[i].append(v)
+                timestamps[i].append(t)
+                emitted = True
+        if emitted:
+            #decoder_idx += 1
+            # update decoder output
+            decoder_input = [h[-context_size:] for h in hyps[:batch_size]]
+            decoder_input = torch.tensor(
+                decoder_input,
+                device=device,
+                dtype=torch.int64,
+            )
+            decoder_out = model.decoder(decoder_input, need_pad=False)
+            decoder_out = model.joiner.decoder_proj(decoder_out)
+
+    sorted_ans = [h[context_size:] for h in hyps]
+    ans = []
+    ans_timestamps = []
+    unsorted_indices = packed_encoder_out.unsorted_indices.tolist()
+    for i in range(N):
+        ans.append(sorted_ans[unsorted_indices[i]])
+        ans_timestamps.append(timestamps[unsorted_indices[i]])
+
+    if not return_timestamps:
+        return ans
+    else:
+        return DecodingResults(
+            hyps=ans,
+            timestamps=ans_timestamps,
+        )
 
 @dataclass
 class Hypothesis:
