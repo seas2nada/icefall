@@ -7,7 +7,7 @@ export PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python
 set -eou pipefail
 
 stage=0
-stop_stage=0
+stop_stage=100
 
 model=pruned_transducer_stateless_w2v
 world_size=4
@@ -29,7 +29,7 @@ if [ $stage -le 0 ] && [ $stop_stage -ge 0 ]; then
     --num-epochs 30 \
     --start-epoch 1 \
     --full-libri 1 \
-    --exp-dir ./pruned_transducer_stateless_w2v/exp \
+    --exp-dir ./pruned_transducer_stateless_w2v/exp_multioptim \
     --max-duration 150 \
     --use-fp16 0 \
     --encoder-type w2v \
@@ -37,10 +37,9 @@ if [ $stage -le 0 ] && [ $stop_stage -ge 0 ]; then
     --decoder-dim 512 \
     --joiner-dim 512  \
     --w2v-url "https://dl.fbaipublicfiles.com/fairseq/wav2vec/wav2vec_small.pt" \
-    --freeze-param "encoder.encoders.mask_emb" "encoder.encoders.feature_extractor" "encoder.encoders.post_extract_proj" "encoder.encoders.quantizer" "encoder.encoders.project_q" \
-    --initial-lr 0.0003 \
-    --lr-batches 50000 \
-    --lr-epochs 10
+    --multi-optim True \
+    --additional-block True \
+    --freeze-param "encoder.encoders.mask_emb" "encoder.encoders.feature_extractor" "encoder.encoders.quantizer" "encoder.encoders.project_q"
 fi
 
 if [ $stage -le 1 ] && [ $stop_stage -ge 1 ]; then
@@ -49,22 +48,20 @@ if [ $stage -le 1 ] && [ $stop_stage -ge 1 ]; then
 
   for chunk in 16; do
     for left in 64; do
-      ./pruned_transducer_stateless_w2v/decode.py \
-              --decode-chunk-size ${chunk} \
-              --left-context ${left} \
-              --causal-convolution 1 \
-              --input-strategy AudioSamples \
-              --epoch 25 \
-              --avg 3 \
-              --exp-dir ./pruned_transducer_stateless_w2v/exp \
-              --max-sym-per-frame 1 \
-              --max-duration 1000 \
-              --decoding-method ${decoding_method} \
-              --encoder-type w2v \
-              --w2v-url "https://dl.fbaipublicfiles.com/fairseq/wav2vec/wav2vec_small.pt" \
-              --encoder-dim 768 \
-              --decoder-dim 512 \
-              --joiner-dim 512
+      ./${model}/decode.py \
+        --input-strategy AudioSamples \
+        --epoch 30 \
+        --avg 5 \
+        --exp-dir ./pruned_transducer_stateless_w2v/exp \
+        --max-duration 600 \
+        --decoding-method modified_beam_search \
+        --beam-size 4 \
+        --encoder-type w2v \
+        --w2v-url "https://dl.fbaipublicfiles.com/fairseq/wav2vec/wav2vec_small.pt" \
+        --encoder-dim 768 \
+        --decoder-dim 512 \
+        --joiner-dim 512 \
+        --additional-block True
     done
   done
 fi

@@ -25,7 +25,6 @@ class FairSeqWav2Vec2Encoder(EncoderInterface):
         output_size: dimension of attention
         w2v_url: url to Wav2Vec2.0 pretrained model
         w2v_dir_path: directory to download the Wav2Vec2.0 pretrained model.
-        normalize_before: whether to use layer_norm before the first block
         finetune_last_n_layers: last n layers to be finetuned in Wav2Vec2.0
                                 0 means to finetune every layer if freeze_w2v=False.
     """
@@ -36,8 +35,8 @@ class FairSeqWav2Vec2Encoder(EncoderInterface):
         w2v_url: str,
         w2v_dir_path: str = "./",
         output_size: int = 256,
-        normalize_before: bool = False,
         freeze_finetune_updates: int = 0,
+        additional_block: bool = False,
     ):
         assert check_argument_types()
         super().__init__()
@@ -77,14 +76,12 @@ class FairSeqWav2Vec2Encoder(EncoderInterface):
 
         self.pretrained_params = copy.deepcopy(model.state_dict())
 
-        self.normalize_before = normalize_before
-        if self.normalize_before:
-            self.after_norm = LayerNorm(output_size)
-
-        if model.cfg.encoder_embed_dim != output_size:
+        if model.cfg.encoder_embed_dim != output_size or additional_block:
             # TODO(xkc09): try LSTM
             self.output_layer = torch.nn.Sequential(
                 torch.nn.Linear(model.cfg.encoder_embed_dim, output_size),
+                torch.nn.LayerNorm(output_size),
+                torch.nn.GELU(),
             )
         else:
             self.output_layer = None
@@ -118,7 +115,8 @@ class FairSeqWav2Vec2Encoder(EncoderInterface):
             self.num_updates += 1
         elif ft and self.num_updates == self.freeze_finetune_updates + 1:
             self.num_updates += 1
-            logging.info("Start fine-tuning wav2vec parameters!")
+            if self.training:
+                logging.info("Start fine-tuning wav2vec parameters!")
 
         with torch.no_grad() if not ft else contextlib.nullcontext():
             enc_outputs = self.encoders(
@@ -138,9 +136,6 @@ class FairSeqWav2Vec2Encoder(EncoderInterface):
 
         if self.output_layer is not None:
             xs_pad = self.output_layer(xs_pad)
-
-        if self.normalize_before:
-            xs_pad = self.after_norm(xs_pad)
 
         return xs_pad, olens
 

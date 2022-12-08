@@ -21,11 +21,17 @@
 Usage:
 (1) greedy search
 ./pruned_transducer_stateless5/decode.py \
-    --epoch 28 \
+    --input-strategy AudioSamples \
+    --epoch 30 \
     --avg 15 \
-    --exp-dir ./pruned_transducer_stateless5/exp \
+    --exp-dir ./pruned_transducer_stateless_w2v/exp \
     --max-duration 600 \
-    --decoding-method greedy_search
+    --decoding-method greedy_search \
+    --encoder-type w2v \
+    --w2v-url "https://dl.fbaipublicfiles.com/fairseq/wav2vec/wav2vec_small.pt" \
+    --encoder-dim 768 \
+    --decoder-dim 512 \
+    --joiner-dim 512
 (2) beam search (not recommended)
 ./pruned_transducer_stateless5/decode.py \
     --epoch 28 \
@@ -36,12 +42,18 @@ Usage:
     --beam-size 4
 (3) modified beam search
 ./pruned_transducer_stateless5/decode.py \
-    --epoch 28 \
+    --input-strategy AudioSamples \
+    --epoch 30 \
     --avg 15 \
-    --exp-dir ./pruned_transducer_stateless5/exp \
+    --exp-dir ./pruned_transducer_stateless_w2v/exp \
     --max-duration 600 \
     --decoding-method modified_beam_search \
-    --beam-size 4
+    --beam-size 4 \
+    --encoder-type w2v \
+    --w2v-url "https://dl.fbaipublicfiles.com/fairseq/wav2vec/wav2vec_small.pt" \
+    --encoder-dim 768 \
+    --decoder-dim 512 \
+    --joiner-dim 512
 (4) fast beam search (one best)
 ./pruned_transducer_stateless5/decode.py \
     --epoch 28 \
