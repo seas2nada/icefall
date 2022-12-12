@@ -20,6 +20,7 @@ import argparse
 import collections
 import logging
 import os
+import shutil
 import re
 import subprocess
 from collections import defaultdict
@@ -175,11 +176,13 @@ class AttributeDict(dict):
 
 
 def encode_supervisions(
-    supervisions: dict, subsampling_factor: int
-) -> Tuple[torch.Tensor, List[str]]:
+    supervisions: dict,
+    subsampling_factor: int,
+    token_ids: Optional[List[List[int]]] = None,
+) -> Tuple[torch.Tensor, Union[List[str], List[List[int]]]]:
     """
     Encodes Lhotse's ``batch["supervisions"]`` dict into
-    a pair of torch Tensor, and a list of transcription strings.
+    a pair of torch Tensor, and a list of transcription strings or token indexes
 
     The supervision tensor has shape ``(batch_size, 3)``.
     Its second dimension contains information about sequence index [0],
@@ -189,16 +192,27 @@ def encode_supervisions(
     returned tensor and list of strings are guaranteed to be consistent with
     each other.
     """
+    try: start_frame = supervisions["start_frame"]
+    except: start_frame = torch.IntTensor([0 for i in range(len(supervisions["cut"]))])
+
+    try: num_frames = supervisions["num_frames"]
+    except:
+        num_frames = []
+        for supervision in supervisions['cut']:
+            try: num_frames.append(supervision.tracks[0].cut.recording.num_samples)
+            except: num_frames.append(supervision.recording.num_samples)
+        num_frames = torch.IntTensor(num_frames)
+
     supervision_segments = torch.stack(
         (
             supervisions["sequence_idx"],
             torch.div(
-                supervisions["start_frame"],
+                start_frame,
                 subsampling_factor,
                 rounding_mode="floor",
             ),
             torch.div(
-                supervisions["num_frames"],
+                num_frames,
                 subsampling_factor,
                 rounding_mode="floor",
             ),
@@ -208,10 +222,14 @@ def encode_supervisions(
 
     indices = torch.argsort(supervision_segments[:, 2], descending=True)
     supervision_segments = supervision_segments[indices]
-    texts = supervisions["text"]
-    texts = [texts[idx] for idx in indices]
 
-    return supervision_segments, texts
+    if token_ids is None:
+        texts = supervisions["text"]
+        res = [texts[idx] for idx in indices]
+    else:
+        res = [token_ids[idx] for idx in indices]
+
+    return supervision_segments, res
 
 
 def get_texts(
@@ -870,9 +888,13 @@ class MetricsTracker(collections.defaultdict):
         for k, v in self.items():
             if k == "frames" or k == "utterances":
                 continue
+            #norm_value = (
+            #    float(v) / num_frames if "utt_" not in k else float(v) / num_utterances
+            #)
             norm_value = (
                 float(v) / num_utterances
             )
+
             ans.append((k, norm_value))
         return ans
 
@@ -1389,3 +1411,16 @@ def is_module_available(*modules: str) -> bool:
     import importlib
 
     return all(importlib.util.find_spec(m) is not None for m in modules)
+
+
+def save_args(args):
+    if not os.path.exists(args.exp_dir):
+        os.makedirs(args.exp_dir)
+    if args.world_size == 4:
+        shutil.copy("./run_bear.sh", f"{args.exp_dir}/run.sh")
+    else:
+        shutil.copy("./run.sh", f"{args.exp_dir}/run.sh")
+    args_dict = vars(args)
+    f = open(f"{args.exp_dir}/config.yaml", 'w')
+    for k, v in args_dict.items():
+        f.write(f"{k}:\t{v}\n")
