@@ -3,36 +3,21 @@
 
 """Encoder definition."""
 import contextlib
-import time
 import copy
-import math 
 import logging
 import os
-from typing import List, Optional, Tuple
-import warnings
+from typing import Optional, Tuple
 
 import torch
 from filelock import FileLock
 from typeguard import check_argument_types
-
-from nets_utils import make_pad_mask
 from encoder_interface import EncoderInterface
-'''
-from scaling import (
-    ActivationBalancer,
-    BasicNorm,
-    DoubleSwish,
-    ScaledConv1d,
-    ScaledConv2d,
-    ScaledLinear,
-)
-'''
-from torch import Tensor, nn
 
-from icefall.utils import make_pad_mask, subsequent_chunk_mask
+from espnet.nets.pytorch_backend.nets_utils import make_pad_mask
+from espnet.nets.pytorch_backend.transformer.layer_norm import LayerNorm
 
 
-class FairSeqData2VecEncoder(EncoderInterface):
+class FairSeqWav2Vec2Encoder(EncoderInterface):
     """FairSeq Wav2Vec2 encoder module.
 
     Args:
@@ -40,7 +25,6 @@ class FairSeqData2VecEncoder(EncoderInterface):
         output_size: dimension of attention
         w2v_url: url to Wav2Vec2.0 pretrained model
         w2v_dir_path: directory to download the Wav2Vec2.0 pretrained model.
-        normalize_before: whether to use layer_norm before the first block
         finetune_last_n_layers: last n layers to be finetuned in Wav2Vec2.0
                                 0 means to finetune every layer if freeze_w2v=False.
     """
@@ -68,31 +52,28 @@ class FairSeqData2VecEncoder(EncoderInterface):
                 )
                 raise e
 
-        if os.path.exists('/home/work/workspace/models/data2vec_model/audio_base_ls.pt'):
-            self.w2v_model_path = '/home/work/workspace/models/data2vec_model/audio_base_ls.pt'
-        if os.path.exists('./models/audio_base_ls.pt'):
-            self.w2v_model_path = './models/audio_base_ls.pt'
+        self.w2v_model_path = download_w2v(w2v_url, w2v_dir_path)
 
         self._output_size = output_size
 
         models, _, _ = fairseq.checkpoint_utils.load_model_ensemble_and_task(
             [self.w2v_model_path],
-            strict=False,
+            arg_overrides={"data": w2v_dir_path},
         )
         model = models[0]
-        model.feature_grad_mult = 0.0 ## for conv network freeze
-        model.mask_prob = 0.5 ## for conv network freeze
-        
+
         if not isinstance(model, Wav2Vec2Model):
             try:
                 model = model.w2v_encoder.w2v_model
-            
-            except:
+            except Exception as e:
                 print(
-                    "using data2vec ..."
+                    "Error: pretrained models should be within: "
+                    "'Wav2Vec2Model, Wav2VecCTC' classes, etc."
                 )
+                raise e
 
         self.encoders = model
+
         self.pretrained_params = copy.deepcopy(model.state_dict())
 
         if model.cfg.encoder_embed_dim != output_size or additional_block:
@@ -113,13 +94,11 @@ class FairSeqData2VecEncoder(EncoderInterface):
 
     def forward(
         self,
-        x: torch.Tensor,
-        x_lens: torch.Tensor,
+        xs_pad: torch.Tensor,
+        ilens: torch.Tensor,
         warmup = None,
         prev_states: torch.Tensor = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        xs_pad = x
-        ilens = x_lens
         """Forward FairSeqWav2Vec2 Encoder.
 
         Args:
@@ -129,23 +108,21 @@ class FairSeqData2VecEncoder(EncoderInterface):
         Returns:
             position embedded tensor and mask
         """
-        with torch.no_grad():
-            xs_pad = torch.nn.functional.layer_norm(xs_pad, xs_pad.shape)
-
         masks = make_pad_mask(ilens).to(xs_pad.device)
 
-        ft = (self.freeze_finetune_updates <= self.num_updates) and self.encoders.training
+        ft = self.freeze_finetune_updates <= self.num_updates
         if self.num_updates <= self.freeze_finetune_updates:
             self.num_updates += 1
         elif ft and self.num_updates == self.freeze_finetune_updates + 1:
             self.num_updates += 1
-            logging.info("Start fine-tuning wav2vec parameters!")
-        
+            if self.training:
+                logging.info("Start fine-tuning wav2vec parameters!")
+
         with torch.no_grad() if not ft else contextlib.nullcontext():
             enc_outputs = self.encoders(
                 xs_pad,
                 masks,
-                mask = ft,
+                mask=self.training,
                 features_only=True,
             )
 
@@ -185,17 +162,3 @@ def download_w2v(model_url, dir_path):
             logging.info(f"Wav2Vec model {model_path} already exists.")
 
     return model_path
-
-
-if __name__ == '__main__':
-    d2v = FairSeqData2VecEncoder(input_size=768, w2v_url='ww', output_size=768)
-    inputs = torch.randn([1, 211564])
-    #a = torch.ones([1000]
-    #b = torch.ones([10000])
-    #c = torch.ones([10000])
-    length = torch.tensor([211564])
-    outputs = d2v(inputs, length)
-    print(outputs[0].size())
-
-    #for n, p in d2v.named_parameters():
-    #    print(n)

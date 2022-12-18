@@ -22,27 +22,32 @@ log() {
 
 if [ $stage -le 0 ] && [ $stop_stage -ge 0 ]; then
   log "Stage 0: Train model"
-  ./${model}/train.py \
+  ./pruned_transducer_stateless_w2v_v2/train.py \
+    --wandb false \
     --input-strategy AudioSamples \
-    --enable-spec-aug false \
-    --world-size ${world_size} \
+    --enable-spec-aug False \
+    --multi-optim True \
+    --world-size 4 \
     --num-epochs 30 \
     --start-epoch 1 \
     --full-libri 1 \
-    --exp-dir ./pruned_transducer_stateless_w2v/exp_multioptim \
-    --max-duration 120 \
+    --exp-dir ./pruned_transducer_stateless_w2v_v2/exp_multioptim \
+    --max-duration 150 \
+    --freeze-finetune-updates 2000 \
     --use-fp16 0 \
+    --peak-enc-lr 0.001 \
+    --peak-dec-lr 0.05 \
+    --accum-grads 1 \
     --encoder-type w2v \
+    --additional-block True \
     --encoder-dim 768 \
     --decoder-dim 768 \
-    --joiner-dim 768  \
-    --initial-enc-lr 0.0001 \
-    --initial-dec-lr 0.003 \
+    --joiner-dim 768 \
+    --prune-range 20 \
+    --context-size 2 \
+    --ctc-loss-scale 0.2 \
     --w2v-url "https://dl.fbaipublicfiles.com/fairseq/wav2vec/wav2vec_small.pt" \
-    --multi-optim True \
-    --additional-block True \
-    --freeze-finetune-updates 2000 \
-    --freeze-param "encoder.encoders.mask_emb" "encoder.encoders.quantizer" "encoder.encoders.project_q"
+    --freeze-param "encoder.encoders.mask_emb" "encoder.encoders.feature_extractor" "encoder.encoders.quantizer" "encoder.encoders.project_q"
 fi
 
 if [ $stage -le 1 ] && [ $stop_stage -ge 1 ]; then
@@ -51,11 +56,11 @@ if [ $stage -le 1 ] && [ $stop_stage -ge 1 ]; then
 
   for chunk in 16; do
     for left in 64; do
-      ./${model}/decode.py \
+      ./pruned_transducer_stateless_w2v_v2/decode.py \
         --input-strategy AudioSamples \
         --epoch 30 \
         --avg 5 \
-        --exp-dir ./pruned_transducer_stateless_w2v/exp_multioptim \
+        --exp-dir ./pruned_transducer_stateless_w2v_v2/exp_multioptim \
         --max-duration 600 \
         --decoding-method modified_beam_search \
         --beam-size 4 \
@@ -64,6 +69,9 @@ if [ $stage -le 1 ] && [ $stop_stage -ge 1 ]; then
         --encoder-dim 768 \
         --decoder-dim 768 \
         --joiner-dim 768 \
+        --prune-range 20 \
+        --context-size 2 \ 
+        --ctc-loss-scale 0.2 \
         --additional-block True
     done
   done

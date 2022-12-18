@@ -53,6 +53,8 @@ cd /path/to/icefall/tools
 
 cd /path/to/icefall/tools
 . ./install_fairseq.sh
+
+#pip install wandb
 ```
 
 ## Recipes
