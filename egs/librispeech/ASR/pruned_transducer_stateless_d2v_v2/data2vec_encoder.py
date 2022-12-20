@@ -17,19 +17,18 @@ from typeguard import check_argument_types
 
 from nets_utils import make_pad_mask
 from encoder_interface import EncoderInterface
-'''
-from scaling import (
-    ActivationBalancer,
-    BasicNorm,
-    DoubleSwish,
-    ScaledConv1d,
-    ScaledConv2d,
-    ScaledLinear,
-)
-'''
 from torch import Tensor, nn
 
 from icefall.utils import make_pad_mask, subsequent_chunk_mask
+try:
+    import fairseq
+    from data2vec_audio import *
+except Exception as e:
+    print("Error: FairSeq is not properly installed.")
+    print(
+        "Please install FairSeq: cd ${MAIN_ROOT}/tools && make fairseq.done"
+    )
+    raise e
 
 
 class FairSeqData2VecEncoder(EncoderInterface):
@@ -56,23 +55,14 @@ class FairSeqData2VecEncoder(EncoderInterface):
     ):
         assert check_argument_types()
         super().__init__()
-
-        if w2v_url != "":
-            try:
-                import fairseq
-                from fairseq.models.wav2vec.wav2vec2 import Wav2Vec2Model
-            except Exception as e:
-                print("Error: FairSeq is not properly installed.")
-                print(
-                    "Please install FairSeq: cd ${MAIN_ROOT}/tools && make fairseq.done"
-                )
-                raise e
-
+                    
+        '''
         if os.path.exists('/home/work/workspace/models/data2vec_model/audio_base_ls.pt'):
             self.w2v_model_path = '/home/work/workspace/models/data2vec_model/audio_base_ls.pt'
-        if os.path.exists('./models/audio_base_ls.pt'):
-            self.w2v_model_path = './models/audio_base_ls.pt'
-
+        if os.path.exists('/workspace/models/audio_base_ls.pt'):
+            self.w2v_model_path = '/workspace/models/audio_base_ls.pt'
+        '''
+        self.w2v_model_path = download_d2v()
         self._output_size = output_size
 
         models, _, _ = fairseq.checkpoint_utils.load_model_ensemble_and_task(
@@ -83,15 +73,6 @@ class FairSeqData2VecEncoder(EncoderInterface):
         model.feature_grad_mult = 0.0 ## for conv network freeze
         model.mask_prob = 0.5 ## for conv network freeze
         
-        if not isinstance(model, Wav2Vec2Model):
-            try:
-                model = model.w2v_encoder.w2v_model
-            
-            except:
-                print(
-                    "using data2vec ..."
-                )
-
         self.encoders = model
         self.pretrained_params = copy.deepcopy(model.state_dict())
 
@@ -164,10 +145,10 @@ class FairSeqData2VecEncoder(EncoderInterface):
 
     def reload_pretrained_parameters(self):
         self.encoders.load_state_dict(self.pretrained_params)
-        logging.info("Pretrained Wav2Vec model parameters reloaded!")
+        logging.info("Pretrained data2vec model parameters reloaded!")
 
 
-def download_w2v(model_url, dir_path):
+def download_d2v(model_url='https://dl.fbaipublicfiles.com/fairseq/data2vec/audio_base_ls.pt', dir_path='./models'):
     os.makedirs(dir_path, exist_ok=True)
 
     model_name = model_url.split("/")[-1]
@@ -180,9 +161,9 @@ def download_w2v(model_url, dir_path):
         if not os.path.exists(model_path):
             torch.hub.download_url_to_file(model_url, model_path)
             torch.hub.download_url_to_file(dict_url, dict_path)
-            logging.info(f"Wav2Vec model downloaded {model_path}")
+            logging.info(f"data2vec model downloaded {model_path}")
         else:
-            logging.info(f"Wav2Vec model {model_path} already exists.")
+            logging.info(f"data2vec model {model_path} already exists.")
 
     return model_path
 

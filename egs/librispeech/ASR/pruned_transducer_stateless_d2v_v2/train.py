@@ -1010,6 +1010,7 @@ def train_one_epoch(
             # NOTE: We use reduction==sum and loss is computed over utterances
             # in the batch and there is no normalization to it so far.
             scaler.scale(loss).backward()
+
             if params.multi_optim and batch_idx % params.accum_grads == 0:
                 set_batch_count(model, params.batch_idx_train)
                 scheduler_enc.step_batch(params.batch_idx_train)
@@ -1073,16 +1074,25 @@ def train_one_epoch(
             # of the grad scaler is configurable, but we can't configure it to have different
             # behavior depending on the current grad scale.
             cur_grad_scale = scaler._scale.item()
+            '''
             if cur_grad_scale < 1.0 or (cur_grad_scale < 8.0 and batch_idx % 400 == 0):
                 scaler.update(cur_grad_scale * 2.0)
+            '''
             if cur_grad_scale < 0.01:
                 logging.warning(f"Grad scale is small: {cur_grad_scale}")
             if cur_grad_scale < 1.0e-05:
+                wb.log({"valid/loss": 10000})
                 raise RuntimeError(
                     f"grad_scale is too small, exiting: {cur_grad_scale}"
                 )
 
-        if batch_idx % params.log_interval == 0:
+        if params.batch_idx_train > 4000 and loss > 300:
+            wb.log({"valid/loss": 10000})
+            raise RunteimError(
+                    f"divergence... exiting: loss={loss}"
+                )
+
+        if batch_idx % (params.log_interval*params.accum_grads) == 0:
             if params.multi_optim:
                 cur_enc_lr = scheduler_enc.get_last_lr()[0]
                 cur_dec_lr = scheduler_dec.get_last_lr()[0]
@@ -1135,10 +1145,10 @@ def train_one_epoch(
                     )
             
             if wb is not None and rank == 0:
-                wb.log({"train/loss": loss_info["loss"]*numel/params.world_size})
-                wb.log({"train/simple_loss": loss_info["simple_loss"]*numel/params.world_size})
-                wb.log({"train/pruned_loss": loss_info["pruned_loss"]*numel/params.world_size})
-                wb.log({"train/ctc_loss": loss_info["ctc_loss"]*numel/params.world_size})
+                wb.log({"train/loss": loss_info["loss"]*numel})
+                wb.log({"train/simple_loss": loss_info["simple_loss"]*numel})
+                wb.log({"train/pruned_loss": loss_info["pruned_loss"]*numel})
+                wb.log({"train/ctc_loss": loss_info["ctc_loss"]*numel})
 
 #if batch_idx % params.valid_interval == 0 and not params.print_diagnostics:
     logging.info("Computing validation loss")
@@ -1267,7 +1277,7 @@ def run(rank, world_size, args, wb=None):
         optimizer_dec = ScaledAdam(
             dec_param,
             lr=params.peak_dec_lr,
-            clipping_scale=2.0,
+            clipping_scale=5.0,
             parameters_names=[dec_names],
         )
 
@@ -1304,12 +1314,13 @@ def run(rank, world_size, args, wb=None):
             logging.info("Loading optimizer state dict")
             optimizer.load_state_dict(checkpoints["optimizer"])
 
-    if (
-        checkpoints
-        and ("scheduler" in checkpoints or "scheduler_enc" in checkpoints)
-        and checkpoints["scheduler"] is not None
-    ):
-        if params.multi_optim:
+    if checkpoints:
+        if (
+            params.multi_optim 
+            and "scheduler_enc" in checkpoints
+            and checkpoints["scheduler_enc"] is not None
+        ):
+            logging.info("Loading enc/dec scheduler state dict")
             scheduler_enc.load_state_dict(checkpoints["scheduler_enc"])
             scheduler_dec.load_state_dict(checkpoints["scheduler_dec"])        
         else:
@@ -1506,7 +1517,7 @@ def main():
     parser = get_parser()
     LibriSpeechAsrDataModule.add_arguments(parser)
     args = parser.parse_args()
-    args.exp_dir = args.exp_dir + str(random.randint(0,400))
+    #args.exp_dir = args.exp_dir + str(random.randint(0,400))
     args.exp_dir = Path(args.exp_dir)
 
     logging.info("save arguments to config.yaml...")
