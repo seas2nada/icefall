@@ -32,11 +32,11 @@ if [ $stage -le 0 ] && [ $stop_stage -ge 0 ]; then
     --start-epoch 1 \
     --full-libri 1 \
     --exp-dir ./pruned_transducer_stateless_w2v_v2/exp_multioptim \
-    --max-duration 150 \
+    --max-duration 140 \
     --freeze-finetune-updates 2000 \
     --use-fp16 0 \
-    --peak-enc-lr 0.001 \
-    --peak-dec-lr 0.05 \
+    --peak-enc-lr 0.0003 \
+    --peak-dec-lr 0.001 \
     --accum-grads 1 \
     --encoder-type w2v \
     --additional-block True \
@@ -60,7 +60,7 @@ if [ $stage -le 1 ] && [ $stop_stage -ge 1 ]; then
         --input-strategy AudioSamples \
         --epoch 30 \
         --avg 5 \
-        --exp-dir ./pruned_transducer_stateless_w2v_v2/exp_multioptim \
+        --exp-dir ./pruned_transducer_stateless_w2v_v2/exp_multioptim357 \
         --max-duration 600 \
         --decoding-method modified_beam_search \
         --beam-size 4 \
@@ -69,9 +69,7 @@ if [ $stage -le 1 ] && [ $stop_stage -ge 1 ]; then
         --encoder-dim 768 \
         --decoder-dim 768 \
         --joiner-dim 768 \
-        --prune-range 20 \
-        --context-size 2 \ 
-        --ctc-loss-scale 0.2 \
+        --context-size 2 \
         --additional-block True
     done
   done
