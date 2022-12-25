@@ -22,32 +22,30 @@ log() {
 
 if [ $stage -le 0 ] && [ $stop_stage -ge 0 ]; then
   log "Stage 0: Train model"
-  ./pruned_transducer_stateless_w2v_v2/train.py \
-    --wandb false \
-    --input-strategy AudioSamples \
-    --enable-spec-aug False \
-    --multi-optim True \
-    --world-size 4 \
-    --num-epochs 30 \
-    --start-epoch 1 \
-    --full-libri 1 \
-    --exp-dir ./pruned_transducer_stateless_w2v_v2/exp_multioptim \
-    --max-duration 140 \
-    --freeze-finetune-updates 2000 \
-    --use-fp16 0 \
-    --peak-enc-lr 0.0003 \
-    --peak-dec-lr 0.001 \
-    --accum-grads 1 \
-    --encoder-type w2v \
-    --additional-block True \
-    --encoder-dim 768 \
-    --decoder-dim 768 \
-    --joiner-dim 768 \
-    --prune-range 20 \
-    --context-size 2 \
-    --ctc-loss-scale 0.2 \
-    --w2v-url "https://dl.fbaipublicfiles.com/fairseq/wav2vec/wav2vec_small.pt" \
-    --freeze-param "encoder.encoders.mask_emb" "encoder.encoders.feature_extractor" "encoder.encoders.quantizer" "encoder.encoders.project_q"
+  ./pruned_transducer_stateless_d2v_v2/train.py \
+        --wandb False \
+        --input-strategy AudioSamples \
+        --enable-spec-aug False \
+        --multi-optim True \
+        --start-epoch 1 \
+        --world-size 4 \
+        --num-epochs 30 \
+        --full-libri 1 \
+        --exp-dir ./pruned_transducer_stateless_d2v_v2/d2v-T \
+        --max-duration 150 \
+        --freeze-finetune-updates 3000 \
+        --encoder-dim 768 \
+        --decoder-dim 768 \
+        --joiner-dim 768 \
+        --use-fp16 1 \
+        --peak-dec-lr 0.04175 \
+        --peak-enc-lr 0.0003859 \
+        --accum-grads 4 \
+        --encoder-type d2v \
+        --additional-block True \
+        --prune-range 10 \
+        --context-size 2 \
+        --ctc-loss-scale 0.2
 fi
 
 if [ $stage -le 1 ] && [ $stop_stage -ge 1 ]; then
@@ -60,12 +58,11 @@ if [ $stage -le 1 ] && [ $stop_stage -ge 1 ]; then
         --input-strategy AudioSamples \
         --epoch 30 \
         --avg 5 \
-        --exp-dir ./pruned_transducer_stateless_w2v_v2/exp_multioptim357 \
+        --exp-dir ./pruned_transducer_stateless_w2v_v2/d2v-T \
         --max-duration 600 \
         --decoding-method modified_beam_search \
         --beam-size 4 \
-        --encoder-type w2v \
-        --w2v-url "https://dl.fbaipublicfiles.com/fairseq/wav2vec/wav2vec_small.pt" \
+        --encoder-type d2v \
         --encoder-dim 768 \
         --decoder-dim 768 \
         --joiner-dim 768 \
