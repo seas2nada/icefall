@@ -50,24 +50,20 @@ fi
 
 if [ $stage -le 1 ] && [ $stop_stage -ge 1 ]; then
   log "Stage 1: Decoding"
-  decoding_method="greedy_search"  # "fast_beam_search", "modified_beam_search"
-
-  for chunk in 16; do
-    for left in 64; do
-      ./pruned_transducer_stateless_w2v_v2/decode.py \
-        --input-strategy AudioSamples \
-        --epoch 30 \
-        --avg 5 \
-        --exp-dir ./pruned_transducer_stateless_w2v_v2/d2v-T \
-        --max-duration 600 \
-        --decoding-method modified_beam_search \
-        --beam-size 4 \
-        --encoder-type d2v \
-        --encoder-dim 768 \
-        --decoder-dim 768 \
-        --joiner-dim 768 \
-        --context-size 2 \
-        --additional-block True
-    done
+  for method in modified_beam_search; do
+    ./pruned_transducer_stateless_d2v_v2/decode_userlibri.py \
+      --input-strategy AudioSamples \
+      --enable-spec-aug False \
+      --additional-block True \
+      --model-name epoch-27.pt \
+      --exp-dir ./pruned_transducer_stateless_d2v_v2/exp_userlibri \
+      --num-buckets 2 \
+      --max-duration 400 \
+      --decoding-method $method \
+      --max-sym-per-frame 1 \
+      --encoder-type d2v \
+      --encoder-dim 768 \
+      --decoder-dim 768 \
+      --joiner-dim 768
   done
 fi
