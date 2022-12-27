@@ -48,22 +48,53 @@ if [ $stage -le 0 ] && [ $stop_stage -ge 0 ]; then
         --ctc-loss-scale 0.2
 fi
 
+# if [ $stage -le 1 ] && [ $stop_stage -ge 1 ]; then
+#   log "Stage 1: Decoding"
+#   for method in modified_beam_search; do
+#     ./pruned_transducer_stateless_d2v_v2/decode_userlibri.py \
+#       --input-strategy AudioSamples \
+#       --enable-spec-aug False \
+#       --additional-block True \
+#       --model-name epoch-27.pt \
+#       --exp-dir ./pruned_transducer_stateless_d2v_v2/exp_userlibri \
+#       --num-buckets 2 \
+#       --max-duration 400 \
+#       --decoding-method $method \
+#       --max-sym-per-frame 1 \
+#       --encoder-type d2v \
+#       --encoder-dim 768 \
+#       --decoder-dim 768 \
+#       --joiner-dim 768
+#   done
+# fi
+
 if [ $stage -le 1 ] && [ $stop_stage -ge 1 ]; then
   log "Stage 1: Decoding"
   for method in modified_beam_search; do
-    ./pruned_transducer_stateless_d2v_v2/decode_userlibri.py \
-      --input-strategy AudioSamples \
+    ./pruned_transducer_stateless5/decode_userlibri.py \
       --enable-spec-aug False \
-      --additional-block True \
-      --model-name epoch-27.pt \
-      --exp-dir ./pruned_transducer_stateless_d2v_v2/exp_userlibri \
+      --model-name epoch-30.pt \
+      --exp-dir ./pruned_transducer_stateless5/exp \
       --num-buckets 2 \
       --max-duration 400 \
       --decoding-method $method \
       --max-sym-per-frame 1 \
-      --encoder-type d2v \
-      --encoder-dim 768 \
-      --decoder-dim 768 \
-      --joiner-dim 768
+      --num-encoder-layers 12
   done
 fi
+
+# if [ $stage -le 1 ] && [ $stop_stage -ge 1 ]; then
+#   log "Stage 1: Decoding"
+#   for method in modified_beam_search; do
+#     ./pruned_transducer_stateless5/decode.py \
+#       --epoch 30 \
+#       --avg 1 \
+#       --use-averaged-model False \
+#       --exp-dir ./pruned_transducer_stateless5/exp \
+#       --num-buckets 2 \
+#       --max-duration 400 \
+#       --decoding-method $method \
+#       --max-sym-per-frame 1 \
+#       --num-encoder-layers 12
+#   done
+# fi

@@ -451,3 +451,191 @@ class LibriSpeechAsrDataModule:
         return load_manifest_lazy(
             self.args.manifest_dir / "librispeech_cuts_test-other.jsonl.gz"
         )
+
+class UserLibriAsrDataModule:
+    """
+    DataModule for k2 ASR experiments.
+    multiple test dataloaders
+
+    This class should be derived for specific corpora used in ASR tasks.
+    """
+
+    def __init__(self, args: argparse.Namespace):
+        self.args = args
+
+    @classmethod
+    def add_arguments(cls, parser: argparse.ArgumentParser):
+        group = parser.add_argument_group(
+            title="ASR data related options",
+            description="These options are used for the preparation of "
+            "PyTorch DataLoaders from Lhotse CutSet's -- they control the "
+            "effective batch sizes, sampling strategies, applied data "
+            "augmentations, etc.",
+        )
+        group.add_argument(
+            "--manifest-dir",
+            type=Path,
+            default=Path("data/fbank"),
+            help="Path to directory with train/valid/test cuts.",
+        )
+        group.add_argument(
+            "--max-duration",
+            type=int,
+            default=250.0,
+            help="Maximum pooled recordings duration (seconds) in a "
+            "single batch. You can reduce it if it causes CUDA OOM.",
+        )
+        group.add_argument(
+            "--bucketing-sampler",
+            type=str2bool,
+            default=True,
+            help="When enabled, the batches will come from buckets of "
+            "similar duration (saves padding frames).",
+        )
+        group.add_argument(
+            "--num-buckets",
+            type=int,
+            default=30,
+            help="The number of buckets for the DynamicBucketingSampler"
+            "(you might want to increase it for larger datasets).",
+        )
+        group.add_argument(
+            "--concatenate-cuts",
+            type=str2bool,
+            default=False,
+            help="When enabled, utterances (cuts) will be concatenated "
+            "to minimize the amount of padding.",
+        )
+        group.add_argument(
+            "--duration-factor",
+            type=float,
+            default=1.0,
+            help="Determines the maximum duration of a concatenated cut "
+            "relative to the duration of the longest cut in a batch.",
+        )
+        group.add_argument(
+            "--gap",
+            type=float,
+            default=1.0,
+            help="The amount of padding (in seconds) inserted between "
+            "concatenated cuts. This padding is filled with noise when "
+            "noise augmentation is used.",
+        )
+        group.add_argument(
+            "--shuffle",
+            type=str2bool,
+            default=True,
+            help="When enabled (=default), the examples will be "
+            "shuffled for each epoch.",
+        )
+        group.add_argument(
+            "--drop-last",
+            type=str2bool,
+            default=True,
+            help="Whether to drop last batch. Used by sampler.",
+        )
+        group.add_argument(
+            "--return-cuts",
+            type=str2bool,
+            default=True,
+            help="When enabled, each batch will have the "
+            "field: batch['supervisions']['cut'] with the cuts that "
+            "were used to construct it.",
+        )
+
+        group.add_argument(
+            "--num-workers",
+            type=int,
+            default=2,
+            help="The number of training dataloader workers that "
+            "collect the batches.",
+        )
+
+        group.add_argument(
+            "--enable-spec-aug",
+            type=str2bool,
+            default=False,
+            help="When enabled, use SpecAugment for training dataset.",
+        )
+
+        group.add_argument(
+            "--spec-aug-time-warp-factor",
+            type=int,
+            default=80,
+            help="Used only when --enable-spec-aug is True. "
+            "It specifies the factor for time warping in SpecAugment. "
+            "Larger values mean more warping. "
+            "A value less than 1 means to disable time warp.",
+        )
+
+        group.add_argument(
+            "--enable-musan",
+            type=str2bool,
+            default=True,
+            help="When enabled, select noise from MUSAN and mix it"
+            "with training dataset. ",
+        )
+
+        group.add_argument(
+            "--input-strategy",
+            type=str,
+            default="AudioSamples",
+            help="AudioSamples or PrecomputedFeatures",
+        )
+
+    def test_dataloaders(self, cuts: CutSet) -> DataLoader:
+        logging.debug("About to create test dataset")
+        test = K2SpeechRecognitionDataset(
+            input_strategy=OnTheFlyFeatures(Fbank(FbankConfig(num_mel_bins=80)))
+            if self.args.on_the_fly_feats
+            else eval(self.args.input_strategy)(),
+            return_cuts=self.args.return_cuts,
+        )
+        sampler = DynamicBucketingSampler(
+            cuts,
+            num_buckets=self.args.num_buckets,
+            max_duration=self.args.max_duration,
+            shuffle=False,
+        )
+        logging.debug("About to create test dataloader")
+        test_dl = DataLoader(
+            test,
+            batch_size=None,
+            sampler=sampler,
+            num_workers=self.args.num_workers,
+        )
+        return test_dl
+
+    @lru_cache()
+    def speaker_wise_cuts(self) -> CutSet:
+        logging.info("About to get speaker-wise cuts")
+        
+        # Get speaker list
+        import os
+        directory = "/DB/UserLibri/audio_data/speaker-wise-test"
+        speaker_list = os.listdir(directory)
+
+        manifests = []
+        for speaker in speaker_list:
+            fname = "userlibri_cuts_" + speaker + ".jsonl.gz"
+            manifests.append(load_manifest_lazy(
+                self.args.manifest_dir / fname
+            ))
+        return manifests, speaker_list
+
+    @lru_cache()
+    def book_wise_cuts(self) -> CutSet:
+        logging.info("About to get book-wise cuts")
+        
+        # Get book list
+        import os
+        directory = "/DB/UserLibri/audio_data/book-wise-test"
+        book_list = os.listdir(directory)
+
+        manifests = []
+        for book in book_list:
+            fname = "userlibri_cuts_" + book + ".jsonl.gz"
+            manifests.append(load_manifest_lazy(
+                self.args.manifest_dir / fname
+            ))
+        return manifests, book_list
