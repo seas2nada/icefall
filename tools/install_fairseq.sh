@@ -11,6 +11,7 @@ sudo apt install pkg-config
 # build fairseq
 rm -rf fairseq
 git clone https://github.com/facebookresearch/fairseq.git; cd fairseq
+sed -i 's/torch>=1.13/torch>=1.10/g' setup.py
 pip install --editable ./
 cd ../
 
