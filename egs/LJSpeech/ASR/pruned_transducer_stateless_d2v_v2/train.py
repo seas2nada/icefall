@@ -21,52 +21,28 @@
 Usage:
 
 export CUDA_VISIBLE_DEVICES="0,1,2,3"
-
-./pruned_transducer_stateless7_ctc/train.py \
-  --world-size 4 \
-  --num-epochs 30 \
-  --start-epoch 1 \
-  --exp-dir pruned_transducer_stateless7_ctc/exp \
-  --full-libri 1 \
-  --max-duration 300
-
-# For mix precision training:
-
-./pruned_transducer_stateless7_ctc/train.py \
-  --world-size 4 \
-  --num-epochs 30 \
-  --start-epoch 1 \
-  --use-fp16 1 \
-  --exp-dir pruned_transducer_stateless7_ctc/exp \
-  --full-libri 1 \
-  --max-duration 550
-
-# For d2v-T training:
-export CUDA_VISIBLE_DEVICES="0,1,2,3,4,5,6,7"
-
 ./pruned_transducer_stateless_d2v_v2/train.py \
-    --wandb true \
+    --wandb False \
     --input-strategy AudioSamples \
     --enable-spec-aug False \
     --multi-optim True \
-    --world-size 8 \ 
+    --start-epoch 1 \
+    --world-size 4 \
     --num-epochs 30 \
-    --start-epoch 1 \ 
-    --full-libri 0 \ 
-    --exp-dir ./pruned_transducer_stateless_d2v_v2/$1 \
-    --max-duration 250 \
-    --freeze-finetune-updates 2000 \
-    --use-fp16 1 \ 
-    --peak-enc-lr 0.001 \
-    --peak-dec-lr 0.05 \
-    --accum-grads 1 \ 
-    --encoder-type d2v \
-    --additional-block True \
+    --exp-dir ./pruned_transducer_stateless_d2v_v2/d2v-T \
+    --max-duration 150 \
+    --freeze-finetune-updates 3000 \
     --encoder-dim 768 \
     --decoder-dim 768 \
     --joiner-dim 768 \
-    --prune-range 20 \
-    --context-size 2 \ 
+    --use-fp16 1 \
+    --peak-dec-lr 0.04175 \
+    --peak-enc-lr 0.0003859 \
+    --accum-grads 4 \
+    --encoder-type d2v \
+    --additional-block True \
+    --prune-range 10 \
+    --context-size 2 \
     --ctc-loss-scale 0.2
 
 """
@@ -87,7 +63,7 @@ import sentencepiece as spm
 import torch
 import torch.multiprocessing as mp
 import torch.nn as nn
-from asr_datamodule import LibriSpeechAsrDataModule
+from asr_datamodule import LJSpeechAsrDataModule
 from decoder import Decoder
 from joiner import Joiner
 from lhotse.cut import Cut
@@ -204,6 +180,18 @@ def add_rep_arguments(parser: argparse.ArgumentParser):
         type=int,
         default=200,
         help="decode interval",
+    )
+
+    parser.add_argument(
+        "--load-prefinetuned-model",
+        type=str,
+        default=None,
+    )
+
+    parser.add_argument(
+        "--use-pseudo-labels",
+        type=str2bool,
+        default=False,
     )
         
 
@@ -628,6 +616,36 @@ def get_transducer_model(params: AttributeDict) -> nn.Module:
         joiner_dim=params.joiner_dim,
         vocab_size=params.vocab_size,
     )
+
+    if params.load_prefinetuned_model is not None:
+        prefinetuned_model = torch.load(params.load_prefinetuned_model)
+        prefinetuned_model = prefinetuned_model['model']
+        state_dict_keys = []
+
+        with torch.no_grad():
+            for name, p in model.named_parameters():
+                if name in prefinetuned_model.keys():
+                    p.copy_(prefinetuned_model[name])
+                else:
+                    raise NotImplementedError(f"""
+                        Parameter names of prefinetuned model and current model are different.
+                        Parameter {key} is not in the current model
+                        """)
+                state_dict_keys.append(name)
+        
+        for key in state_dict_keys:
+            if key in prefinetuned_model.keys():
+                continue
+            else:
+                raise NotImplementedError(f"""
+                    Parameter names of prefinetuned model and current model are different.
+                    Parameter {key} is not in the prefinetuned model
+                    """)
+
+                raise NotImplementedError("")
+
+        logging.info(f'Model parameters from {params.load_prefinetuned_model} loaded')
+
     return model
 
 
@@ -1336,12 +1354,9 @@ def run(rank, world_size, args, wb=None):
     if params.inf_check:
         register_inf_check_hooks(model)
 
-    librispeech = LibriSpeechAsrDataModule(args)
+    ljspeech = LJSpeechAsrDataModule(args)
 
-    train_cuts = librispeech.train_clean_100_cuts()
-    if params.full_libri:
-        train_cuts += librispeech.train_clean_360_cuts()
-        train_cuts += librispeech.train_other_500_cuts()
+    train_cuts = ljspeech.train_cuts(pseudo=args.use_pseudo_labels)
 
     def remove_short_and_long_utt(c: Cut):
         # Keep only utterances with duration between 1 second and 20 seconds
@@ -1363,13 +1378,12 @@ def run(rank, world_size, args, wb=None):
     else:
         sampler_state_dict = None
 
-    train_dl = librispeech.train_dataloaders(
+    train_dl = ljspeech.train_dataloaders(
         train_cuts, sampler_state_dict=sampler_state_dict
     )
 
-    valid_cuts = librispeech.dev_clean_cuts()
-    valid_cuts += librispeech.dev_other_cuts()
-    valid_dl = librispeech.valid_dataloaders(valid_cuts)
+    valid_cuts = ljspeech.dev_cuts()
+    valid_dl = ljspeech.valid_dataloaders(valid_cuts)
     
     '''
     if not params.print_diagnostics:
@@ -1515,7 +1529,7 @@ def scan_pessimistic_batches_for_oom(
 
 def main():
     parser = get_parser()
-    LibriSpeechAsrDataModule.add_arguments(parser)
+    LJSpeechAsrDataModule.add_arguments(parser)
     args = parser.parse_args()
     #args.exp_dir = args.exp_dir + str(random.randint(0,400))
     args.exp_dir = Path(args.exp_dir)

@@ -42,7 +42,6 @@ encoder_dim:	768
 freeze_finetune_updates:	3000
 additional_block:	True
 decode_interval:	200
-full_libri:	True
 manifest_dir:	data/fbank
 max_duration:	150
 bucketing_sampler:	True
@@ -50,7 +49,6 @@ num_buckets:	30
 concatenate_cuts:	False
 duration_factor:	1.0
 gap:	1.0
-on_the_fly_feats:	False
 shuffle:	True
 drop_last:	True
 return_cuts:	True

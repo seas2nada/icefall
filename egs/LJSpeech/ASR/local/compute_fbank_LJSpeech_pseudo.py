@@ -82,7 +82,7 @@ def compute_fbank_LJSpeech(bpe_model: Optional[str] = None):
     directory = data_dir + '/wavs'
 
     parts = ['train', 'dev', 'test']
-    prefix = "LJSpeech"
+    prefix = "LJSpeech_pseudo"
     suffix = "jsonl.gz"
     manifests = read_manifests_if_cached(
         dataset_parts=parts,

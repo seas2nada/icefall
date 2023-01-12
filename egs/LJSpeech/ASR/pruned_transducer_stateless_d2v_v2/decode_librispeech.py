@@ -48,7 +48,7 @@ import k2
 import sentencepiece as spm
 import torch
 import torch.nn as nn
-from asr_datamodule import LibriSpeechAsrDataModule, UserLibriAsrDataModule, LJSpeechAsrDataModule
+from asr_datamodule import LibriSpeechAsrDataModule
 from beam_search import (
     beam_search,
     fast_beam_search_nbest,
@@ -270,13 +270,6 @@ def get_parser():
         type=int,
         default=64,
         help="left context can be seen during decoding (in frames after subsampling)",
-    )
-
-    parser.add_argument(
-        "--gen-pseudo-label",
-        type=str2bool,
-        default=False,
-        help="make pseudo labels for train set",
     )
 
     add_model_arguments(parser)
@@ -776,60 +769,34 @@ def main():
 
     # we need cut ids to display recognition results.
     args.return_cuts = True
-    LJSpeech = LJSpeechAsrDataModule(args)
+    librispeech = LibriSpeechAsrDataModule(args)
 
-    if args.gen_pseudo_label:
-        train_cuts = LJSpeech.train_cuts()
-        train_dl_ = LJSpeech.test_dataloaders(train_cuts)
-        
-        test_sets = ["train"]
-        train_dl_ = [train_dl_]
-        
-        for test_set, test_dl in zip(test_sets, train_dl_):
-            results_dict = decode_dataset(
-                dl=test_dl,
-                params=params,
-                model=model,
-                sp=sp,
-                word_table=word_table,
-                decoding_graph=decoding_graph,
-            )
+    test_clean_cuts = librispeech.test_clean_cuts()
+    test_other_cuts = librispeech.test_other_cuts()
 
-            save_results(
-                params=params,
-                test_set_name=test_set,
-                results_dict=results_dict,
-            )
+    test_clean_dl = librispeech.test_dataloaders(test_clean_cuts)
+    test_other_dl = librispeech.test_dataloaders(test_other_cuts)
 
-        logging.info("Done!")
+    test_sets = ["test-clean", "test-other"]
+    test_dl = [test_clean_dl, test_other_dl]
 
-    else:
-        dev_cuts = LJSpeech.dev_cuts()
-        test_cuts = LJSpeech.test_cuts()
+    for test_set, test_dl in zip(test_sets, test_dl):
+        results_dict = decode_dataset(
+            dl=test_dl,
+            params=params,
+            model=model,
+            sp=sp,
+            word_table=word_table,
+            decoding_graph=decoding_graph,
+        )
 
-        dev_dl = LJSpeech.test_dataloaders(dev_cuts)
-        test_dl_ = LJSpeech.test_dataloaders(test_cuts)
+        save_results(
+            params=params,
+            test_set_name=test_set,
+            results_dict=results_dict,
+        )
 
-        test_sets = ["dev", "test"]
-        test_dl_ = [dev_dl, test_dl_]
-
-        for test_set, test_dl in zip(test_sets, test_dl_):
-            results_dict = decode_dataset(
-                dl=test_dl,
-                params=params,
-                model=model,
-                sp=sp,
-                word_table=word_table,
-                decoding_graph=decoding_graph,
-            )
-
-            save_results(
-                params=params,
-                test_set_name=test_set,
-                results_dict=results_dict,
-            )
-
-        logging.info("Done!")
+    logging.info("Done!")
 
 
 if __name__ == "__main__":
