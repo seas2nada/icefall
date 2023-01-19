@@ -20,6 +20,8 @@
 """
 Usage:
 
+# initialize_param_list = ["ctc_output.1.bias","ctc_output.1.weight","decoder.conv.weight","decoder.embedding.weight","encoder.encoders.encoder.layers.10.self_attn.k_proj.bias","encoder.encoders.encoder.layers.11.self_attn.k_proj.bias","encoder.encoders.encoder.layers.9.self_attn.k_proj.bias","encoder.output_layer.0.bias","encoder.output_layer.0.weight","encoder.output_layer.1.weight","joiner.decoder_proj.bias","joiner.decoder_proj.weight","joiner.encoder_proj.bias","joiner.encoder_proj.weight","joiner.output_linear.bias","joiner.output_linear.weight","simple_am_proj.bias","simple_am_proj.weight","simple_lm_proj.bias","simple_lm_proj.weight"]
+
 export CUDA_VISIBLE_DEVICES="0,1,2,3"
 ./pruned_transducer_stateless_d2v_v2/train.py \
     --wandb False \
@@ -189,7 +191,25 @@ def add_rep_arguments(parser: argparse.ArgumentParser):
     )
 
     parser.add_argument(
+        "--load-unsupfinetuned-model",
+        type=str,
+        default=None,
+    )
+
+    parser.add_argument(
         "--use-pseudo-labels",
+        type=str2bool,
+        default=False,
+    )
+    
+    parser.add_argument(
+        "--update-ema",
+        type=str2bool,
+        default=False,
+    )
+
+    parser.add_argument(
+        "--layer-average",
         type=str2bool,
         default=False,
     )
@@ -562,6 +582,7 @@ def get_encoder_model(params: AttributeDict) -> nn.Module:
                     output_size=params.encoder_dim,
                     freeze_finetune_updates=params.freeze_finetune_updates,
                     additional_block=params.additional_block,
+                    layer_average=params.layer_average,
                 ) 
     else:
         encoder = Zipformer(
@@ -627,24 +648,48 @@ def get_transducer_model(params: AttributeDict) -> nn.Module:
                 if name in prefinetuned_model.keys():
                     p.copy_(prefinetuned_model[name])
                 else:
-                    raise NotImplementedError(f"""
-                        Parameter names of prefinetuned model and current model are different.
-                        Parameter {key} is not in the current model
+                    logging.info(f"""
+                        [WARNING] Parameter names of prefinetuned model and current model are different.
+                        Parameter {name} is not in the current model
                         """)
                 state_dict_keys.append(name)
         
-        for key in state_dict_keys:
-            if key in prefinetuned_model.keys():
-                continue
-            else:
-                raise NotImplementedError(f"""
-                    Parameter names of prefinetuned model and current model are different.
-                    Parameter {key} is not in the prefinetuned model
-                    """)
+            for key in prefinetuned_model.keys():
+                if key in state_dict_keys:
+                    continue
+                else:
+                    logging.info(f"""
+                        [WARNING] Parameter names of prefinetuned model and current model are different.
+                        Parameter {key} is not in the prefinetuned model
+                        """)
 
-                raise NotImplementedError("")
+            logging.info(f'Model parameters from {params.load_prefinetuned_model} loaded')
 
-        logging.info(f'Model parameters from {params.load_prefinetuned_model} loaded')
+    elif params.load_unsupfinetuned_model is not None:
+        prefinetuned_model = torch.load(params.load_unsupfinetuned_model)
+        prefinetuned_model = prefinetuned_model['model']
+        state_dict_keys = []
+
+        with torch.no_grad():
+            for name, p in model.named_parameters():
+                if name in prefinetuned_model.keys():
+                    p.copy_(prefinetuned_model[name])
+                else:
+                    logging.info(f"""
+                        [WARNING] Parameter names of prefinetuned model and current model are different.
+                        Parameter {name} is not in the current model
+                        """)
+                state_dict_keys.append(name)
+
+            for key in prefinetuned_model.keys():
+                if key in state_dict_keys:
+                    continue
+                else:
+                    logging.info(f"Removing pre-trained modules: Parameter {key} has been discarded")
+
+            logging.info(f'Model parameters from {params.load_unsupfinetuned_model} loaded')
+
+        del prefinetuned_model
 
     return model
 
@@ -1274,7 +1319,10 @@ def run(rank, world_size, args, wb=None):
         dec_names = []
         dec_param = []
         
+        org_state_dict = {}
         for n, p in model.named_parameters():
+            org_state_dict[n] = p.data.clone()
+
             name = n.split('.')[1]
             if name == 'encoder' and 'feature_extractor' not in n:
                 enc_names.append(n)
@@ -1430,6 +1478,22 @@ def run(rank, world_size, args, wb=None):
             rank=rank,
             wb=wb,
         )
+
+        # TODO: argument
+        if params.update_ema:
+            with torch.no_grad():
+                ema_decay = 0.999
+                ema_end_decay = 0.99999
+                start_weight = 1 - (params.cur_epoch / params.num_epochs)
+                end_weight = 1 - start_weight
+                alpha = start_weight * ema_decay + end_weight * ema_end_decay
+
+                initialize_param_list = ["ctc_output.1.bias","ctc_output.1.weight","decoder.conv.weight","decoder.embedding.weight","encoder.encoders.encoder.layers.10.self_attn.k_proj.bias","encoder.encoders.encoder.layers.11.self_attn.k_proj.bias","encoder.encoders.encoder.layers.9.self_attn.k_proj.bias","encoder.output_layer.0.bias","encoder.output_layer.0.weight","encoder.output_layer.1.weight","joiner.decoder_proj.bias","joiner.decoder_proj.weight","joiner.encoder_proj.bias","joiner.encoder_proj.weight","joiner.output_linear.bias","joiner.output_linear.weight","simple_am_proj.bias","simple_am_proj.weight","simple_lm_proj.bias","simple_lm_proj.weight"]
+                for name, p in model.named_parameters():
+                    if name in initialize_param_list:
+                        p_org = org_state_dict[name]
+                        p.copy_(alpha * p.data + (1 - alpha) * p_org)
+                        org_state_dict[name] = p.data.clone()
 
         if params.print_diagnostics:
             diagnostic.print_diagnostics()

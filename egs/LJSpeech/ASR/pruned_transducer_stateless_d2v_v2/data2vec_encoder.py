@@ -52,6 +52,7 @@ class FairSeqData2VecEncoder(EncoderInterface):
         output_size: int = 256,
         freeze_finetune_updates: int = 0,
         additional_block: bool = False,
+        layer_average: bool = False,
     ):
         assert check_argument_types()
         super().__init__()
@@ -88,9 +89,26 @@ class FairSeqData2VecEncoder(EncoderInterface):
 
         self.freeze_finetune_updates = freeze_finetune_updates
         self.num_updates = 0
+        
+        self.layer_average = layer_average
+        if self.layer_average:
+            self.encoders.encoder.layerdrop = 0.0 # no layerdrop for weight averaging
+            self.layer_num = 12 # FIXME: argument
+            self.weights = nn.Parameter(torch.zeros(self.layer_num))
 
     def output_size(self) -> int:
         return self._output_size
+
+    def _weighted_sum(self, feature):
+        stacked_feature = torch.stack(feature, dim=0)
+
+        _, *origin_shape = stacked_feature.shape
+        stacked_feature = stacked_feature.view(self.layer_num, -1)
+        norm_weights = F.softmax(self.weights, dim=-1)
+        weighted_feature = (norm_weights.unsqueeze(-1) * stacked_feature).sum(dim=0)
+        weighted_feature = weighted_feature.view(*origin_shape)
+
+        return weighted_feature
 
     def forward(
         self,
@@ -130,7 +148,15 @@ class FairSeqData2VecEncoder(EncoderInterface):
                 features_only=True,
             )
 
-        xs_pad = enc_outputs["x"]  # (B,T,C),
+        if self.layer_average:
+            xs_pad = list()
+            for lr in enc_outputs["layer_results"]:
+                xs_pad.append(lr[0].transpose(0,1))
+
+            xs_pad = self._weighted_sum(xs_pad)
+        else:
+            xs_pad = enc_outputs["x"]  # (B,T,C),
+
         bs = xs_pad.shape[0]
         if enc_outputs["padding_mask"] is not None:
             masks = enc_outputs["padding_mask"]  # (B, T)
