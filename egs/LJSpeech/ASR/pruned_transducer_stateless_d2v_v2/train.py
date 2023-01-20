@@ -201,6 +201,12 @@ def add_rep_arguments(parser: argparse.ArgumentParser):
         type=str2bool,
         default=False,
     )
+
+    parser.add_argument(
+        "--pseudo-name",
+        type=str,
+        default=None,
+    )
     
     parser.add_argument(
         "--update-ema",
@@ -1404,7 +1410,7 @@ def run(rank, world_size, args, wb=None):
 
     ljspeech = LJSpeechAsrDataModule(args)
 
-    train_cuts = ljspeech.train_cuts(pseudo=args.use_pseudo_labels)
+    train_cuts = ljspeech.train_cuts(pseudo=args.use_pseudo_labels, pseudo_name=args.pseudo_name)
 
     def remove_short_and_long_utt(c: Cut):
         # Keep only utterances with duration between 1 second and 20 seconds

@@ -22,7 +22,7 @@ with open(input_file, 'r') as f:
             filename = match.group(1)
             hyp = match.group(2)
             hyp = hyp.replace("'", "").replace("[", "").replace("]", "").split(',')
-            hyp_sentence = ' '.join(hyp)
+            hyp_sentence = ' '.join(hyp).replace("  "," ")
 
             filename = "-".join(filename.split('-')[:-1])
             output_file = os.path.join(output_directory, f'{filename}.txt')

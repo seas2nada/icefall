@@ -77,7 +77,6 @@ def main():
 
     assert manifest.is_file(), f"{manifest} does not exist"
     cut_set = load_manifest_lazy(manifest)
-
     assert isinstance(cut_set, CutSet)
 
     for c in cut_set:

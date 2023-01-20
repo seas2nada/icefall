@@ -977,12 +977,15 @@ class LJSpeechAsrDataModule:
         return test_dl
 
     @lru_cache()
-    def train_cuts(self, pseudo=False) -> CutSet:
+    def train_cuts(self, pseudo=False, pseudo_name=None) -> CutSet:
         logging.info("About to get LJSpeech train cuts")
         if pseudo:
-            return load_manifest_lazy(
-                self.args.manifest_dir / "LJSpeech_pseudo_cuts_train.jsonl.gz"
-            )
+            if pseudo_name is None:
+                raise NotImplementedError(f"--pseudo-name argument is needed")
+            else:
+                return load_manifest_lazy(
+                    self.args.manifest_dir / f"{pseudo_name}_cuts_train.jsonl.gz"
+                )
         else:
             return load_manifest_lazy(
                 self.args.manifest_dir / "LJSpeech_cuts_train.jsonl.gz"

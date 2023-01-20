@@ -20,14 +20,19 @@ log() {
   echo -e "$(date '+%Y-%m-%d %H:%M:%S') (${fname}:${BASH_LINENO[0]}:${FUNCNAME[1]}) $*"
 }
 
-# ft_model=./pruned_transducer_stateless_d2v_v2/d2v-T-LJft-pseudo-trained/libri_finetuned.pt
+# ft_model=./pruned_transducer_stateless_d2v_v2/d2v-T/epoch-27.pt
 # ft_model=./transducer_unsupervised_finetuning_d2v_v2/unsup_LJft_trial2/best_locked.pt
+
+ft_model=./pruned_transducer_stateless_d2v_v2/M_1/best-valid-loss.pt
+expdir=./pruned_transducer_stateless_d2v_v2/M_1
+pn=LJSpeech_pseudo_iter1
 if [ $stage -le 0 ] && [ $stop_stage -ge 0 ]; then
   log "Stage 0: Train model"
   ./pruned_transducer_stateless_d2v_v2/train.py \
         --wandb False \
         --use-pseudo-labels True \
-        --load-prefinetuned-model ./pruned_transducer_stateless_d2v_v2/d2v-T-LJft-pseudo-trained/libri_finetuned.pt \
+        --pseudo-name $pn \
+        --load-prefinetuned-model $ft_model \
         --input-strategy AudioSamples \
         --enable-spec-aug False \
         --multi-optim True \
@@ -56,10 +61,9 @@ fi
 if [ $stage -le 1 ] && [ $stop_stage -ge 1 ]; then
   log "Stage 1: Decoding"
   # modified_beam_search, greedy_search, ctc_greedy_search
-  expdir=./pruned_transducer_stateless_d2v_v2/d2v-T-LJft-oracle-epoch100
-  for method in ctc_greedy_search; do
+  for method in modified_beam_search; do
     ./pruned_transducer_stateless_d2v_v2/decode.py \
-      --gen-pseudo-label False \
+      --gen-pseudo-label True \
       --input-strategy AudioSamples \
       --enable-spec-aug False \
       --additional-block True \

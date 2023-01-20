@@ -64,7 +64,7 @@ def get_args():
     return parser.parse_args()
 
 
-def compute_fbank_LJSpeech(bpe_model: Optional[str] = None):
+def compute_fbank_LJSpeech(pseudo_name, bpe_model: Optional[str] = None):
     src_dir = Path("data/manifests")
     output_dir = Path("data/fbank")
     num_jobs = min(15, os.cpu_count())
@@ -82,7 +82,7 @@ def compute_fbank_LJSpeech(bpe_model: Optional[str] = None):
     directory = data_dir + '/wavs'
 
     parts = ['train', 'dev', 'test']
-    prefix = "LJSpeech_pseudo"
+    prefix = f"{pseudo_name}"
     suffix = "jsonl.gz"
     manifests = read_manifests_if_cached(
         dataset_parts=parts,
@@ -136,5 +136,7 @@ if __name__ == "__main__":
 
     logging.basicConfig(format=formatter, level=logging.INFO)
     args = get_args()
+    dl_dir = args.data_dir
+    pseudo_name = dl_dir.split('/')[-1]
     logging.info(vars(args))
-    compute_fbank_LJSpeech(bpe_model=args.bpe_model)
+    compute_fbank_LJSpeech(pseudo_name, bpe_model=args.bpe_model)

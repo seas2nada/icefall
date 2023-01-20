@@ -26,6 +26,7 @@ if [ $stage -le 0 ] && [ $stop_stage -ge 0 ]; then
   ./pruned_transducer_stateless_d2v_v2/train.py \
         --wandb False \
         --use-pseudo-labels True \
+        --pseudo-name LJSpeech_pseudo_iter1 \
         --load-unsupfinetuned-model $ft_model \
         --input-strategy AudioSamples \
         --enable-spec-aug False \
@@ -35,7 +36,7 @@ if [ $stage -le 0 ] && [ $stop_stage -ge 0 ]; then
         --num-epochs 30 \
         --exp-dir ./pruned_transducer_stateless_d2v_v2/d2v-T-LJft \
         --max-duration 150 \
-        --freeze-finetune-updates 100000 \
+        --freeze-finetune-updates 0 \
         --encoder-dim 768 \
         --decoder-dim 768 \
         --joiner-dim 768 \
@@ -55,10 +56,11 @@ fi
 if [ $stage -le 1 ] && [ $stop_stage -ge 1 ]; then
   log "Stage 1: Decoding"
   # modified_beam_search, greedy_search, ctc_greedy_search
-  expdir=./pruned_transducer_stateless_d2v_v2/d2v-T-LJft-oracle-epoch100
-  for method in ctc_greedy_search; do
+  # expdir=./pruned_transducer_stateless_d2v_v2/d2v-T-LJft-oracle-epoch100
+  expdir=./pruned_transducer_stateless_d2v_v2/d2v-T-LJft
+  for method in modified_beam_search; do
     ./pruned_transducer_stateless_d2v_v2/decode.py \
-      --gen-pseudo-label False \
+      --gen-pseudo-label True \
       --input-strategy AudioSamples \
       --enable-spec-aug False \
       --additional-block True \

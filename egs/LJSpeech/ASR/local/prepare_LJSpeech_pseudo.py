@@ -57,6 +57,8 @@ def prepare_LJSpeech(
     #     set(texts)
     # )
 
+    pseudo_name = corpus_dir.split("/")[-1]
+
     manifests = {}
 
     dataset_parts = ["train", "dev", "test"]
@@ -107,10 +109,10 @@ def prepare_LJSpeech(
 
         if output_dir is not None:
             supervision_set.to_file(
-                output_dir / f"LJSpeech_pseudo_supervisions_{part}.jsonl.gz"
+                output_dir / f"{pseudo_name}_supervisions_{part}.jsonl.gz"
             )
             recording_set.to_file(
-                output_dir / f"LJSpeech_pseudo_recordings_{part}.jsonl.gz"
+                output_dir / f"{pseudo_name}_recordings_{part}.jsonl.gz"
             )
 
         manifests[part] = {

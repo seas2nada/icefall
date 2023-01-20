@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 
+# usage:
+# ./prepare_pseudo_LJ.sh --pseudo-name LJSpeech_pseudo_iterX
+
 # fix segmentation fault reported in https://github.com/k2-fsa/icefall/issues/674
 export PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python
 . ../../../tools/activate_python.sh
@@ -7,14 +10,14 @@ export PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python
 set -eou pipefail
 
 nj=15
-stage=-1
+stage=1
 stop_stage=100
 
 # We assume dl_dir (download dir) contains the following
 # directories and files. If not, they will be downloaded
 # by this script automatically.
 #
-#  - $dl_dir/LJSpeech_pseudo
+#  - $dl_dir/${pseudo_name}
 #      You can find BOOKS.TXT, test-clean, train-clean-360, etc, inside it.
 #      You can download them from https://www.openslr.org/12
 #
@@ -26,9 +29,9 @@ stop_stage=100
 #        - 3-gram.pruned.1e-7.arpa
 #        - 4-gram.arpa.gz
 #        - 4-gram.arpa
-#        - LJSpeech_pseudo-vocab.txt
-#        - LJSpeech_pseudo-lexicon.txt
-#        - LJSpeech_pseudo-lm-norm.txt.gz
+#        - ${pseudo_name}-vocab.txt
+#        - ${pseudo_name}-lexicon.txt
+#        - ${pseudo_name}-lm-norm.txt.gz
 #
 #  - $dl_dir/musan
 #      This directory contains the following directories downloaded from
@@ -38,6 +41,7 @@ stop_stage=100
 #     - noise
 #     - speech
 dl_dir=/DB
+pseudo_name=LJSpeech_pseudo_iter1
 
 . shared/parse_options.sh || exit 1
 
@@ -66,12 +70,12 @@ log "dl_dir: $dl_dir"
 if [ $stage -le 0 ] && [ $stop_stage -ge 0 ]; then
   log "Stage 0: Download data"
 
-  # If you have pre-downloaded it to /path/to/LJSpeech_pseudo,
+  # If you have pre-downloaded it to /path/to/${pseudo_name},
   # you can create a symlink
   #
-  #   ln -sfv /path/to/LJSpeech_pseudo $dl_dir/LJSpeech_pseudo
+  #   ln -sfv /path/to/${pseudo_name} $dl_dir/${pseudo_name}
   #
-  if [ ! -d $dl_dir/LJSpeech_pseudo/wav ]; then
+  if [ ! -d $dl_dir/$pseudo_name/wav ]; then
     echo "download not supported yet";
   fi
 
@@ -83,13 +87,10 @@ if [ $stage -le 0 ] && [ $stop_stage -ge 0 ]; then
   if [ ! -d $dl_dir/musan ]; then
     lhotse download musan $dl_dir
   fi
-fi
 
-if [ $stage -le 1 ] && [ $stop_stage -ge 1 ]; then
-  log "Stage 1: Prepare LJSpeech_pseudo manifest"
-  # We assume that you have downloaded the LJSpeech_pseudo corpus (ver 1.1)
-  # You need to prepare LJSpeech_pseudo according to data_settings/*_list.txt like below
-  # $dl_dir/LJSpeech_pseudo
+  # We assume that you have downloaded the ${pseudo_name} corpus (ver 1.1)
+  # You need to prepare ${pseudo_name} according to data_settings/*_list.txt like below
+  # $dl_dir/${pseudo_name}
   # |-- wavs
   # |   |-- train
   # |   |-- dev
@@ -97,24 +98,27 @@ if [ $stage -le 1 ] && [ $stop_stage -ge 1 ]; then
   # |-- texts
   # |-- metadata.csv
 
-  # to $dl_dir/LJSpeech_pseudo
-  if [ ! -e $dl_dir/LJSpeech_pseudo/.LJSpeech_pseudo.done ]; then
+  # to $dl_dir/${pseudo_name}
+  if [ ! -e $dl_dir/${pseudo_name}/.${pseudo_name}.done ]; then
     for dset in "train" "dev" "test"; do
-      log "Resampling LJSpeech_pseudo $dset set"
-      file_list=`ls $dl_dir/LJSpeech_pseudo/wavs/$dset/`
+      log "Resampling ${pseudo_name} $dset set"
+      file_list=`ls $dl_dir/${pseudo_name}/wavs/$dset/`
       for wavfile in $file_list; do
-        sox -v 0.9 $dl_dir/LJSpeech_pseudo/wavs/$dset/$wavfile -r 16000 -e signed-integer $dl_dir/LJSpeech_pseudo/wavs/$dset/tmp_$wavfile
-        mv $dl_dir/LJSpeech_pseudo/wavs/$dset/tmp_$wavfile $dl_dir/LJSpeech_pseudo/wavs/$dset/$wavfile
+        sox -v 0.9 $dl_dir/${pseudo_name}/wavs/$dset/$wavfile -r 16000 -e signed-integer $dl_dir/${pseudo_name}/wavs/$dset/tmp_$wavfile
+        mv $dl_dir/${pseudo_name}/wavs/$dset/tmp_$wavfile $dl_dir/${pseudo_name}/wavs/$dset/$wavfile
       done
       log "Resampling $dset done"
     done
-    sudo touch $dl_dir/LJSpeech_pseudo/.LJSpeech_pseudo.done
+    sudo touch $dl_dir/${pseudo_name}/.${pseudo_name}.done
   fi
+fi
 
+if [ $stage -le 1 ] && [ $stop_stage -ge 1 ]; then
+  log "Stage 1: Prepare ${pseudo_name} manifest"
   mkdir -p data/manifests
-  if [ ! -e data/manifests/.LJSpeech_pseudo.done ]; then
-    python local/prepare_LJSpeech_pseudo.py $dl_dir/LJSpeech_pseudo
-    touch data/manifests/.LJSpeech_pseudo.done
+  if [ ! -e data/manifests/.${pseudo_name}.done ]; then
+    python local/prepare_LJSpeech_pseudo.py $dl_dir/${pseudo_name}
+    touch data/manifests/.${pseudo_name}.done
   fi
 fi
 
@@ -130,19 +134,19 @@ if [ $stage -le 2 ] && [ $stop_stage -ge 2 ]; then
 fi
 
 if [ $stage -le 2 ] && [ $stop_stage -ge 2 ]; then
-  log "Stage 3: Compute fbank for LJSpeech_pseudo"
+  log "Stage 3: Compute fbank for ${pseudo_name}"
   mkdir -p data/fbank
-  if [ ! -e data/fbank/.LJSpeech_pseudo.done ]; then
-    ./local/compute_fbank_LJSpeech_pseudo.py --data-dir $dl_dir/LJSpeech_pseudo
-    touch data/fbank/.LJSpeech_pseudo.done
+  if [ ! -e data/fbank/.${pseudo_name}.done ]; then
+    ./local/compute_fbank_LJSpeech_pseudo.py --data-dir $dl_dir/${pseudo_name}
+    touch data/fbank/.${pseudo_name}.done
   fi
 
-  if [ ! -e data/fbank/.LJSpeech_pseudo-validated.done ]; then
-    log "Validating data/fbank for LJSpeech_pseudo"
-    parts=`ls /DB/LJSpeech_pseudo/wavs/`
+  if [ ! -e data/fbank/.${pseudo_name}-validated.done ]; then
+    log "Validating data/fbank for ${pseudo_name}"
+    parts=`ls /DB/${pseudo_name}/wavs/`
     for part in ${parts[@]}; do
       python3 ./local/validate_manifest.py \
-        data/fbank/LJSpeech_pseudo_cuts_${part}.jsonl.gz
+        data/fbank/${pseudo_name}_cuts_${part}.jsonl.gz
     done
   fi
 fi
