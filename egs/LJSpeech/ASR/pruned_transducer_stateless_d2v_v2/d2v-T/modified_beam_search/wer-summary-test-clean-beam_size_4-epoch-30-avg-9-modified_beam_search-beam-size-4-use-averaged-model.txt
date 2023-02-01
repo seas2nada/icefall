@@ -1,2 +1,0 @@
-settings	WER
-beam_size_4	2.67

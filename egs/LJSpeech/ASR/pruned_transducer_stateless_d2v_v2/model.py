@@ -148,29 +148,6 @@ class Transducer(nn.Module):
         boundary[:, 2] = y_lens
         boundary[:, 3] = x_lens
 
-        entropy_minimize = True
-        if entropy_minimize:
-          with torch.no_grad():
-            cos = []
-            self_tar_lens = torch.zeros(x.size(0)).int()
-            max_len = 0
-            for bidx, co in enumerate(ctc_output):
-              co = co.argmax(-1)
-              blk = torch.nonzero(co)
-              co = co[blk]
-              cos.append(co.unique_consecutive())
-              self_tar_lens[bidx] += len(co)
-              if max_len < len(co):
-                max_len = len(co)
-              
-              boundary_ = torch.zeros((x.size(0), 4), dtype=torch.int64, device=x.device)
-              boundary_[:, 2] = self_tar_lens
-              boundary_[:, 3] = x_lens
-          
-          self_target = torch.zeros(len(cos), max_len).int()
-          for bidx, co in enumerate(cos):
-            self_target[bidx, :len(co)] = co
-
         lm = self.simple_lm_proj(decoder_out)
         am = self.simple_am_proj(encoder_out)
 
@@ -186,20 +163,6 @@ class Transducer(nn.Module):
                 reduction="sum",
                 return_grad=True,
             )
-
-            # if entropy_minimize:
-            #   simple_loss_, (px_grad_, py_grad_) = k2.rnnt_loss_smoothed(
-            #     lm=lm.float(),
-            #     am=am.float(),
-            #     symbols=self_target,
-            #     termination_symbol=blank_id,
-            #     lm_only_scale=lm_scale,
-            #     am_only_scale=am_scale,
-            #     boundary=boundary_,
-            #     reduction="sum",
-            #     return_grad=True,
-            #   )
-              # simple_loss += simple_loss_
 
         # ranges : [B, T, prune_range]
         ranges = k2.get_rnnt_prune_ranges(
@@ -232,17 +195,6 @@ class Transducer(nn.Module):
                 boundary=boundary,
                 reduction="sum",
             )
-            # if entropy_minimize:
-            #   pruned_loss = k2.rnnt_loss_pruned(
-            #     logits=logits.float(),
-            #     symbols=self_target,
-            #     ranges=ranges,
-            #     termination_symbol=blank_id,
-            #     boundary=boundary,
-            #     reduction="sum",
-            #   )
-            #   pruned_loss += pruned_loss_
-
         return (simple_loss, pruned_loss, ctc_output)
 
     def decode(
@@ -251,16 +203,61 @@ class Transducer(nn.Module):
         x_lens: torch.Tensor,
         y: k2.RaggedTensor,
         sp,
+        decoding_graph=None,
+        method="greedy_search_batch",
     ):
-        from beam_search import greedy_search_batch
+        from beam_search import greedy_search_batch, ctc_greedy_search, modified_beam_search, fast_beam_search_nbest, fast_beam_search_nbest_LG
 
         encoder_out, x_lens = self.encoder(x, x_lens)
 
         hyps = []
-        hyp_tokens = greedy_search_batch(self, encoder_out, x_lens)
+        if "fast_beam_search_nbest" in method:
+          beam = 4
+          max_contexts = 8
+          max_states = 64
+          num_paths = 200
+          nbest_scale = 0.5
+
+          if decoding_graph is None:
+            raise NotImplementedError("need decoding graph for fast beam search")
+          
+          if method == "fast_beam_search_nbest_LG":
+            hyp_tokens = fast_beam_search_nbest_LG(
+                model=self,
+                decoding_graph=decoding_graph,
+                encoder_out=encoder_out,
+                encoder_out_lens=x_lens,
+                beam=beam,
+                max_contexts=max_contexts,
+                max_states=max_states,
+                num_paths=num_paths,
+                nbest_scale=nbest_scale,
+            )
+
+          else:
+            method = fast_beam_search_nbest
+            hyp_tokens = method(
+              self, 
+              decoding_graph=decoding_graph,
+              encoder_out=encoder_out,
+              encoder_out_lens=x_lens,
+              beam=beam,
+              max_contexts=max_contexts,
+              max_states=max_states,
+              num_paths=num_paths,
+              nbest_scale=nbest_scale,
+              )
+        
+        else:
+          if method == "greedy_search_batch":
+            method = greedy_search_batch
+          elif method == "ctc_greedy_search":
+            method = ctc_greedy_search
+          else:
+            method = modified_beam_search
+          hyp_tokens = method(self, encoder_out, x_lens)
 
         for hyp in sp.decode(hyp_tokens):
             hyps.append(hyp.split())
 
         return hyps
-

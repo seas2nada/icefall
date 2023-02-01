@@ -23,9 +23,10 @@ log() {
 # ft_model=./pruned_transducer_stateless_d2v_v2/d2v-T/epoch-27.pt
 # ft_model=./transducer_unsupervised_finetuning_d2v_v2/unsup_LJft_trial2/best_locked.pt
 
-ft_model=./pruned_transducer_stateless_d2v_v2/M_1/best-valid-loss.pt
-expdir=./pruned_transducer_stateless_d2v_v2/M_1
-pn=LJSpeech_pseudo_iter1
+ft_model=./pruned_transducer_stateless_d2v_v2/M_0/epoch-27.pt
+# ft_model=./pruned_transducer_stateless_d2v_v2/M_0/best-valid-loss.pt
+expdir=./pruned_transducer_stateless_d2v_v2/M_0to3
+pn=LJSpeech_pseudo_iter0to2
 if [ $stage -le 0 ] && [ $stop_stage -ge 0 ]; then
   log "Stage 0: Train model"
   ./pruned_transducer_stateless_d2v_v2/train.py \
@@ -39,7 +40,7 @@ if [ $stage -le 0 ] && [ $stop_stage -ge 0 ]; then
         --start-epoch 1 \
         --world-size 4 \
         --num-epochs 30 \
-        --exp-dir ./pruned_transducer_stateless_d2v_v2/d2v-T-LJft \
+        --exp-dir $expdir \
         --max-duration 150 \
         --freeze-finetune-updates 0 \
         --encoder-dim 768 \
@@ -63,7 +64,7 @@ if [ $stage -le 1 ] && [ $stop_stage -ge 1 ]; then
   # modified_beam_search, greedy_search, ctc_greedy_search
   for method in modified_beam_search; do
     ./pruned_transducer_stateless_d2v_v2/decode.py \
-      --gen-pseudo-label True \
+      --gen-pseudo-label False \
       --input-strategy AudioSamples \
       --enable-spec-aug False \
       --additional-block True \

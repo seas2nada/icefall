@@ -207,6 +207,12 @@ def add_rep_arguments(parser: argparse.ArgumentParser):
         type=str,
         default=None,
     )
+
+    parser.add_argument(
+        "--on-the-fly-pseudo-labels",
+        type=str2bool,
+        default=False,
+    )
     
     parser.add_argument(
         "--update-ema",
@@ -866,6 +872,31 @@ def compute_loss(
     batch_idx_train = params.batch_idx_train
     warm_step = params.warm_step
 
+    if params.on_the_fly_pseudo_labels:
+        supervision_ref = batch["supervisions"]["text"][0]
+        model.eval()
+        
+        decoding_graph = k2.trivial_graph(params.vocab_size - 1, device=device)
+        with torch.no_grad():
+            method = "modified_beam_search"
+            # method = "fast_beam_search_nbest"
+            hypos = model.module.decode(
+                x=feature,
+                x_lens=feature_lens,
+                y=None,
+                sp=sp,
+                decoding_graph=decoding_graph,
+                method=method,
+            )
+
+            texts = []
+            for hyp in hypos:
+                texts.append(" ".join(hyp))
+            batch["supervisions"]["text"] = texts
+            supervisions = batch["supervisions"]
+        
+        model.train()
+
     texts = batch["supervisions"]["text"]
     token_ids = sp.encode(texts, out_type=int)
     y = k2.RaggedTensor(token_ids).to(device)
@@ -937,13 +968,16 @@ def compute_loss(
     if decode:
         model.eval()
         with torch.no_grad():
-            hypos = model.module.decode(
-                x=feature,
-                x_lens=feature_lens,
-                y=y,
-                sp=sp
-            )
-            logging.info(f'ref: {batch["supervisions"]["text"][0]}')
+            if not params.on_the_fly_pseudo_labels:
+                hypos = model.module.decode(
+                    x=feature,
+                    x_lens=feature_lens,
+                    y=y,
+                    sp=sp
+                )
+                supervision_ref = batch["supervisions"]["text"][0]
+            
+            logging.info(f'ref: {supervision_ref}')
             logging.info(f'hyp: {" ".join(hypos[0])}')
         model.train()
 
@@ -1485,7 +1519,6 @@ def run(rank, world_size, args, wb=None):
             wb=wb,
         )
 
-        # TODO: argument
         if params.update_ema:
             with torch.no_grad():
                 ema_decay = 0.999
@@ -1494,12 +1527,10 @@ def run(rank, world_size, args, wb=None):
                 end_weight = 1 - start_weight
                 alpha = start_weight * ema_decay + end_weight * ema_end_decay
 
-                initialize_param_list = ["ctc_output.1.bias","ctc_output.1.weight","decoder.conv.weight","decoder.embedding.weight","encoder.encoders.encoder.layers.10.self_attn.k_proj.bias","encoder.encoders.encoder.layers.11.self_attn.k_proj.bias","encoder.encoders.encoder.layers.9.self_attn.k_proj.bias","encoder.output_layer.0.bias","encoder.output_layer.0.weight","encoder.output_layer.1.weight","joiner.decoder_proj.bias","joiner.decoder_proj.weight","joiner.encoder_proj.bias","joiner.encoder_proj.weight","joiner.output_linear.bias","joiner.output_linear.weight","simple_am_proj.bias","simple_am_proj.weight","simple_lm_proj.bias","simple_lm_proj.weight"]
                 for name, p in model.named_parameters():
-                    if name in initialize_param_list:
-                        p_org = org_state_dict[name]
-                        p.copy_(alpha * p.data + (1 - alpha) * p_org)
-                        org_state_dict[name] = p.data.clone()
+                    p_org = org_state_dict[name]
+                    p.copy_(alpha * p.data + (1 - alpha) * p_org)
+                    org_state_dict[name] = p.data.clone()
 
         if params.print_diagnostics:
             diagnostic.print_diagnostics()

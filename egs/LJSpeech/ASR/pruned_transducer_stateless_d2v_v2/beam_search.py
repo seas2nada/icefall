@@ -2340,3 +2340,48 @@ def modified_beam_search_rnnlm_LODR(
         ans.append(sorted_ans[unsorted_indices[i]])
 
     return ans
+
+def ctc_greedy_search(
+    model: Transducer,
+    encoder_out: torch.Tensor,
+    encoder_out_lens: torch.Tensor,
+) -> Union[List[int], DecodingResults]:
+    """Greedy search for a single utterance.
+    Args:
+      model:
+        An instance of `Transducer`.
+      encoder_out:
+        A tensor of shape (N, T, C) from the encoder. Support only N==1 for now.
+      max_sym_per_frame:
+        Maximum number of symbols per frame. If it is set to 0, the WER
+        would be 100%.
+      return_timestamps:
+        Whether to return timestamps.
+    Returns:
+      If return_timestamps is False, return the decoded result.
+      Else, return a DecodingResults object containing
+      decoded result and corresponding timestamps.
+    """
+    assert encoder_out.ndim == 3
+    assert encoder_out.size(0) >= 1, encoder_out.size(0)
+
+    device = next(model.parameters()).device
+
+    blank_id = model.decoder.blank_id
+    unk_id = getattr(model, "unk_id", blank_id)
+
+    # batch_size_list = packed_encoder_out.batch_sizes.tolist()
+    N = encoder_out.size(0)
+    # assert torch.all(encoder_out_lens > 0), encoder_out_lens
+    # assert N == batch_size_list[0], (N, batch_size_list)
+
+    encoder_out = model.ctc_output(encoder_out)
+    encoder_out = encoder_out.argmax(-1)
+
+    hyp = []
+    for encoder_out_ in encoder_out:
+      encoder_out_ = encoder_out_.unique_consecutive()
+      encoder_out_ = encoder_out_[torch.where(encoder_out_ != 0)]
+      hyp.append(encoder_out_.detach().cpu().tolist())
+
+    return hyp
