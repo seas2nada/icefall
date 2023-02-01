@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 
+# Usage
+# dir에 /path/to/modified_beam_search
+# out_dir에 /path/to/userlibri_results
+
 # fix segmentation fault reported in https://github.com/k2-fsa/icefall/issues/674
 export PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python
 . ../../../tools/activate_python.sh
