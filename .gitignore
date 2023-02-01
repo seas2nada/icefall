@@ -30,7 +30,11 @@ tools/activate_python.sh
 
 egs/librispeech/ASR/pruned_transducer_stateless_d2v_v2/d2v-T
 egs/librispeech/ASR/pruned_transducer_stateless_d2v_v2/M*
+
 egs/userlibri/ASR/pruned_transducer_stateless_d2v_v2/M*
+egs/userlibri/ASR/userlibri_results*
+egs/userlibri/ASR/pruned_transducer_stateless_d2v_dhver/M*
+
 egs/LJSpeech/ASR/pruned_transducer_stateless_d2v_v2/d2v-T*
 egs/LJSpeech/ASR/pruned_transducer_stateless_d2v_v2/M*
 egs/LJSpeech/ASR/transducer_unsupervised_finetuning_d2v_v2/d2v-T*
