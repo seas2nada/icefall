@@ -54,10 +54,16 @@ def get_args():
         help="""Path to the bpe.model. If not None, we will remove short and
         long utterances before extracting features""",
     )
+    parser.add_argument(
+        "--directory",
+        type=str,
+    )    
     return parser.parse_args()
 
 
-def compute_fbank_userlibri(bpe_model: Optional[str] = None):
+def compute_fbank_userlibri(directory, bpe_model: Optional[str] = None):
+    pname = directory.split('/')[-1]
+
     src_dir = Path("data/manifests")
     output_dir = Path("data/fbank")
     num_jobs = min(15, os.cpu_count())
@@ -68,7 +74,6 @@ def compute_fbank_userlibri(bpe_model: Optional[str] = None):
         sp = spm.SentencePieceProcessor()
         sp.load(bpe_model)
 
-    directory = "/DB/UserLibri_all"
     spks_parts = os.listdir(directory)
 
     dataset_parts = spks_parts
@@ -93,9 +98,9 @@ def compute_fbank_userlibri(bpe_model: Optional[str] = None):
 
     with get_executor() as ex:  # Initialize the executor only once.
         for partition, m in manifests.items():
-            cuts_filename = f"{prefix}_cuts_{partition}.{suffix}"
+            cuts_filename = f"{prefix}_cuts_{partition}_{pname}.{suffix}"
             if (output_dir / cuts_filename).is_file():
-                logging.info(f"{partition} already exists - skipping.")
+                logging.info(f"{pname} already exists - skipping.")
                 continue
             logging.info(f"Processing {partition}")
             cut_set = CutSet.from_manifests(
@@ -105,13 +110,14 @@ def compute_fbank_userlibri(bpe_model: Optional[str] = None):
             if bpe_model:
                 cut_set = filter_cuts(cut_set, sp)
 
-            if "train" in partition:
+            if "all" in partition:
                 cut_set = (
                     cut_set + cut_set.perturb_speed(0.9) + cut_set.perturb_speed(1.1)
                 )
+            
             cut_set = cut_set.compute_and_store_features(
                 extractor=extractor,
-                storage_path=f"{output_dir}/{prefix}_feats_{partition}",
+                storage_path=f"{output_dir}/{prefix}_feats_{partition}_{pname}",
                 # when an executor is specified, make more partitions
                 num_jobs=num_jobs if ex is None else 80,
                 executor=ex,
@@ -122,8 +128,9 @@ def compute_fbank_userlibri(bpe_model: Optional[str] = None):
 
 if __name__ == "__main__":
     formatter = "%(asctime)s %(levelname)s [%(filename)s:%(lineno)d] %(message)s"
+    import sys
 
     logging.basicConfig(format=formatter, level=logging.INFO)
     args = get_args()
     logging.info(vars(args))
-    compute_fbank_userlibri(bpe_model=args.bpe_model)
+    compute_fbank_userlibri(args.directory, bpe_model=args.bpe_model)

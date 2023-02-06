@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
 
+# usage
+# prepare_allspk.sh --dir_name UserLibri_iter1
+
 # fix segmentation fault reported in https://github.com/k2-fsa/icefall/issues/674
 export PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python
+
+. ../../../tools/activate_python.sh
 
 set -eou pipefail
 
@@ -13,7 +18,7 @@ stop_stage=100
 # directories and files. If not, they will be downloaded
 # by this script automatically.
 #
-#  - $dl_dir/UserLibri_all
+#  - $dl_dir/$dir_name
 #      You can find BOOKS.TXT, test-clean, train-clean-360, etc, inside it.
 #      You can download them from https://www.openslr.org/12
 #
@@ -25,9 +30,9 @@ stop_stage=100
 #        - 3-gram.pruned.1e-7.arpa
 #        - 4-gram.arpa.gz
 #        - 4-gram.arpa
-#        - UserLibri_all-vocab.txt
-#        - UserLibri_all-lexicon.txt
-#        - UserLibri_all-lm-norm.txt.gz
+#        - $dir_name-vocab.txt
+#        - $dir_name-lexicon.txt
+#        - $dir_name-lm-norm.txt.gz
 #
 #  - $dl_dir/musan
 #      This directory contains the following directories downloaded from
@@ -37,6 +42,7 @@ stop_stage=100
 #     - noise
 #     - speech
 dl_dir=/DB/
+dir_name=UserLibri_all
 
 . shared/parse_options.sh || exit 1
 
@@ -62,53 +68,53 @@ log() {
 
 log "dl_dir: $dl_dir"
 
-# We assume that you have downloaded the UserLibri_all dataset
-# You need to prepare UserLibri_all like below
-# $dl_dir/UserLibri_all
+# We assume that you have downloaded the $dir_name dataset
+# You need to prepare $dir_name like below
+# $dl_dir/$dir_name
 # |-- audio_data
 # |   |-- speaker-all
 
 if [ $stage -le 0 ] && [ $stop_stage -ge 0 ]; then
   log "Stage 0: Download data"
 
-  # If you have pre-downloaded it to /path/to/UserLibri_all,
+  # If you have pre-downloaded it to /path/to/$dir_name,
   # you can create a symlink
   #
-  #   ln -sfv /path/to/UserLibri_all $dl_dir/UserLibri_all
+  #   ln -sfv /path/to/$dir_name $dl_dir/$dir_name
   #
-  if [ ! -d $dl_dir/UserLibri_all/ ]; then
-    echo "Download not supported yet. Please prepare /DB/UserLibri_all as described in prepare_userlibri.sh";
+  if [ ! -d $dl_dir/$dir_name/ ]; then
+    echo "Download not supported yet. Please prepare /DB/$dir_name as described in prepare_userlibri.sh";
     exit;
   fi
 fi
 
 if [ $stage -le 1 ] && [ $stop_stage -ge 1 ]; then
-  log "Stage 1: Prepare UserLibri_all manifest"
-  # We assume that you have downloaded the UserLibri_all corpus
-  # to $dl_dir/UserLibri_all
+  log "Stage 1: Prepare $dir_name manifest"
+  # We assume that you have downloaded the $dir_name corpus
+  # to $dl_dir/$dir_name
   mkdir -p data/manifests
-  if [ ! -e data/manifests/.UserLibri_all.done ]; then
-    python prepare_userlibri_all.py
-    touch data/manifests/.UserLibri_all.done
+  if [ ! -e data/manifests/.$dir_name.done ]; then
+    python prepare_userlibri_all.py $dl_dir/$dir_name
+    touch data/manifests/.$dir_name.done
   fi
 fi
 
 if [ $stage -le 2 ] && [ $stop_stage -ge 2 ]; then
-  log "Stage 2: Compute fbank for userlibri_all"
+  log "Stage 2: Compute fbank for $dir_name"
   mkdir -p data/fbank
-  if [ ! -e data/fbank/.userlibri_all.done ]; then
-    ./local/compute_fbank_userlibri_all.py
-    touch data/fbank/.userlibri_all.done
+  if [ ! -e data/fbank/.$dir_name.done ]; then
+    ./local/compute_fbank_userlibri_all.py --directory $dl_dir/$dir_name
+    touch data/fbank/.$dir_name.done
   fi
 
-  if [ ! -e data/fbank/.userlibri_all-validated.done ]; then
-    log "Validating data/fbank for userlibri_all"
-    parts=`ls /DB/UserLibri_all/`
+  if [ ! -e data/fbank/.$dir_name-validated.done ]; then
+    log "Validating data/fbank for $dir_name"
+    parts=`ls /DB/$dir_name/`
     for part in ${parts[@]}; do
       python3 ./local/validate_manifest.py \
-        data/fbank/userlibri_cuts_${part}.jsonl.gz
+        data/fbank/userlibri_cuts_${part}_$dir_name.jsonl.gz
     done
 
-    touch data/fbank/.userlibri_all-validated.done
+    touch data/fbank/.$dir_name-validated.done
   fi
 fi

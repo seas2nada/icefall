@@ -3,21 +3,22 @@
 # Usage
 # dir에 /path/to/modified_beam_search
 # out_dir에 /path/to/userlibri_results
+# . ./sort_userlibri_result.sh --dir $dir --out_dir $out_dir
 
 # fix segmentation fault reported in https://github.com/k2-fsa/icefall/issues/674
 export PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python
 . ../../../tools/activate_python.sh
 
+dir="pruned_transducer_stateless_d2v_dhver/M_oracle/modified_beam_search"
+out_dir="userlibri_results/M_oracle"
+
 set -eou pipefail
 
-dir="pruned_transducer_stateless_d2v_v2/M_0/modified_beam_search"
-out_dir="userlibri_results"
+. shared/parse_options.sh || exit 1
 
 if [ ! -d "$out_dir" ]; then
   mkdir -p $out_dir
 fi
-
-. shared/parse_options.sh || exit 1
 
 ls $dir | grep wer-summary > temp_ls.txt
 rm -rf $out_dir/spk_results.txt

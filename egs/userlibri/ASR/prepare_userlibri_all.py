@@ -7,6 +7,7 @@ import zipfile
 from concurrent.futures.thread import ThreadPoolExecutor
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple, Union
+import sys
 
 from tqdm.auto import tqdm
 
@@ -120,6 +121,7 @@ def prepare_userlibri(
     :return: a Dict whose key is the dataset part, and the value is Dicts with the keys 'audio' and 'supervisions'.
     """
     
+    pname = corpus_dir.split("/")[1]
     corpus_dir = Path(corpus_dir)
     assert corpus_dir.is_dir(), f"No such directory: {corpus_dir}"
 
@@ -177,10 +179,10 @@ def prepare_userlibri(
 
             if output_dir is not None:
                 supervision_set.to_file(
-                    output_dir / f"userlibri_supervisions_{part}.jsonl.gz"
+                    output_dir / f"userlibri_supervisions_{part}_{pname}.jsonl.gz"
                 )
                 recording_set.to_file(
-                    output_dir / f"userlibri_recordings_{part}.jsonl.gz"
+                    output_dir / f"userlibri_recordings_{part}_{pname}.jsonl.gz"
                 )
 
             manifests[part] = {
@@ -240,7 +242,7 @@ def parse_alignments(ali_path: Pathlike) -> Dict[str, List[AlignmentItem]]:
 def main():
     nj = 15
     output_dir = "data/manifests"
-    corpus_dir = "/DB/UserLibri_all"
+    corpus_dir = sys.argv[1]
 
     prepare_userlibri(corpus_dir, "auto", output_dir, nj)
 

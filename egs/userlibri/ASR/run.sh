@@ -20,13 +20,18 @@ log() {
 
 model_dir=pruned_transducer_stateless_d2v_dhver
 ft_model=./$model_dir/M_0/libri_prefinetuned.pt
-expdir=./$model_dir/M_oracle
-pn=UserLibri_pseudo_iter0to2
+# ft_model=./d2v_transducer_text_encoder_finetuning/M_speaker-1995_text_ft_ce/best-valid-loss.pt
+individual="speaker-1995"
+
+expdir=./$model_dir/M_${individual}
+pn=pl_iter0
 if [ $stage -le 0 ] && [ $stop_stage -ge 0 ]; then
-  log "Stage 0: Train model"
-  ./pruned_transducer_stateless_d2v_dhver/train.py \
+log "Stage 0: Train model"
+./pruned_transducer_stateless_d2v_dhver/train.py \
         --wandb False \
-        --use-pseudo-labels False \
+        --train-individual $individual \
+        --use-pseudo-labels True \
+        --on-the-fly-pseudo-labels False \
         --pseudo-name $pn \
         --load-prefinetuned-model $ft_model \
         --input-strategy AudioSamples \
@@ -34,9 +39,10 @@ if [ $stage -le 0 ] && [ $stop_stage -ge 0 ]; then
         --multi-optim True \
         --start-epoch 1 \
         --world-size 4 \
-        --num-epochs 100 \
+        --num-epochs 50 \
         --exp-dir $expdir \
-        --max-duration 150 \
+        --num-buckets 2 \
+        --max-duration 100 \
         --freeze-finetune-updates 0 \
         --encoder-dim 768 \
         --decoder-dim 768 \
@@ -53,17 +59,24 @@ if [ $stage -le 0 ] && [ $stop_stage -ge 0 ]; then
         --update-ema False \
         --layer-average False
 fi
+# --peak-dec-lr 0.04175 \
+# --peak-enc-lr 0.0003859 \
+
+rm -rf $expdir/epoch-*
 
 if [ $stage -le 1 ] && [ $stop_stage -ge 1 ]; then
   log "Stage 1: Decoding"
   # modified_beam_search, greedy_search, ctc_greedy_search
   for method in modified_beam_search; do
-    ./pruned_transducer_stateless_d2v_dhver/decode.py \
+      ./pruned_transducer_stateless_d2v_dhver/decode.py \
+      --decode-individual $individual \
+      --gen-pseudo-label False \
       --input-strategy AudioSamples \
       --enable-spec-aug False \
       --additional-block True \
       --model-name best-valid-loss.pt \
       --exp-dir $expdir \
+      --num-buckets 2 \
       --max-duration 400 \
       --decoding-method $method \
       --max-sym-per-frame 1 \
@@ -73,5 +86,3 @@ if [ $stage -le 1 ] && [ $stop_stage -ge 1 ]; then
       --joiner-dim 768
   done
 fi
-# TODO:
-# --gen-pseudo-label False \

@@ -225,6 +225,12 @@ def add_rep_arguments(parser: argparse.ArgumentParser):
         type=str2bool,
         default=False,
     )
+
+    parser.add_argument(
+        "--train-individual",
+        type=str,
+        default=None,
+    )
         
 
 def add_model_arguments(parser: argparse.ArgumentParser):
@@ -1279,6 +1285,10 @@ def train_one_epoch(
         wb.log({"valid/pruned_loss": valid_info["pruned_loss"]*numel})
         wb.log({"valid/ctc_loss": valid_info["ctc_loss"]*numel})
 
+    # FIXME: why tot_loss["utterances"] is sometimes 0?
+    if tot_loss["utterances"] == 0:
+        tot_loss["utterances"] = 1
+
     loss_value = tot_loss["loss"] / tot_loss["utterances"]
     params.train_loss = loss_value
     if params.train_loss < params.best_train_loss:
@@ -1444,7 +1454,11 @@ def run(rank, world_size, args, wb=None):
 
     userlibri = UserLibriAsrDataModule(args)
 
-    train_cuts = userlibri.train_cuts(pseudo=args.use_pseudo_labels, pseudo_name=args.pseudo_name)
+    pseudo_name = args.pseudo_name if args.use_pseudo_labels else None
+    if params.train_individual is not None:
+        train_cuts = userlibri.individual_cuts(params.train_individual, pseudo=args.use_pseudo_labels, pseudo_name=pseudo_name)
+    else:
+        train_cuts = userlibri.train_cuts(pseudo=args.use_pseudo_labels, pseudo_name=pseudo_name)
 
     def remove_short_and_long_utt(c: Cut):
         # Keep only utterances with duration between 1 second and 20 seconds

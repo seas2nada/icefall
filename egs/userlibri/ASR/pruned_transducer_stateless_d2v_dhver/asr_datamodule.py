@@ -796,12 +796,28 @@ class UserLibriAsrDataModule:
                 raise NotImplementedError(f"--pseudo-name argument is needed")
             else:
                 return load_manifest_lazy(
-                    self.args.manifest_dir / f"{pseudo_name}_cuts_train.jsonl.gz"
+                    self.args.manifest_dir / f"userlibri_cuts_audio_data_{pseudo_name}.jsonl.gz"
                 )
         else:
             # FIXME! need clever way
             return load_manifest_lazy(
                 self.args.manifest_dir / "userlibri_cuts_audio_data.jsonl.gz"
+            )
+
+    @lru_cache()
+    def individual_cuts(self, name, pseudo=False, pseudo_name=None) -> CutSet:
+        logging.info(f"About to get UserLibri train cuts for {name}")
+        if pseudo:
+            if pseudo_name is None:
+                raise NotImplementedError(f"--pseudo-name argument is needed")
+            else:
+                return load_manifest_lazy(
+                    self.args.manifest_dir / f"userlibri_cuts_{name}_{pseudo_name}.jsonl.gz"
+                )
+        else:
+            # FIXME! need clever way
+            return load_manifest_lazy(
+                self.args.manifest_dir / f"userlibri_cuts_{name}.jsonl.gz"
             )
 
     @lru_cache()
