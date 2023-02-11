@@ -802,7 +802,7 @@ def compute_loss(
     y = k2.RaggedTensor(token_ids).to(device)
 
     with torch.set_grad_enabled(is_training):
-        simple_loss, pruned_loss, ctc_output = model(
+        (simple_loss, pruned_loss, ctc_output), (slm_loss, plm_loss) = model(
             x=feature,
             x_lens=feature_lens,
             y=y,
@@ -826,6 +826,8 @@ def compute_loss(
         )
 
         loss = simple_loss_scale * simple_loss + pruned_loss_scale * pruned_loss
+        if slm_loss is not None:
+            loss += simple_loss_scale * 100 * slm_loss + pruned_loss_scale * 100 * plm_loss
     
     info = MetricsTracker()
     
@@ -887,6 +889,9 @@ def compute_loss(
     info["loss"] = loss.detach().cpu().item()
     info["simple_loss"] = simple_loss.detach().cpu().item()
     info["pruned_loss"] = pruned_loss.detach().cpu().item()
+    if slm_loss is not None:
+        info["slm_loss"] = slm_loss.detach().cpu().item()
+        info["plm_loss"] = plm_loss.detach().cpu().item()
 
     return loss, info
 
@@ -910,6 +915,7 @@ def compute_validation_loss(
             sp=sp,
             batch=batch,
             is_training=False,
+            decode = True if batch_idx % params.decode_interval == 0 else False,
         )
         assert loss.requires_grad is False
         tot_loss = tot_loss + loss_info
@@ -997,7 +1003,6 @@ def train_one_epoch(
                     sp=sp,
                     batch=batch,
                     is_training=True,
-                    decode = True if batch_idx % params.decode_interval == 0 else False,
                 )
             loss_info.reduce(loss.device)
 

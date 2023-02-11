@@ -71,6 +71,16 @@ class Transducer(nn.Module):
         )
         self.simple_lm_proj = nn.Linear(decoder_dim, vocab_size)
 
+        self.slm_output = nn.Sequential(
+            nn.Dropout(p=0.1),
+            nn.Linear(vocab_size, vocab_size),
+        )
+
+        self.plm_output = nn.Sequential(
+            nn.Dropout(p=0.1),
+            nn.Linear(decoder_dim, vocab_size),
+        )
+
         self.ctc_output = nn.Sequential(
             nn.Dropout(p=0.1),
             nn.Linear(encoder_dim, vocab_size),
@@ -123,6 +133,10 @@ class Transducer(nn.Module):
         encoder_out, x_lens = self.encoder(x, x_lens)
         assert torch.all(x_lens > 0)
 
+        use_lm_loss = False
+        slm_loss = None
+        plm_loss = None
+
         # compute ctc log-probs
         ctc_output = self.ctc_output(encoder_out)
 
@@ -149,6 +163,12 @@ class Transducer(nn.Module):
         boundary[:, 3] = x_lens
 
         lm = self.simple_lm_proj(decoder_out)
+        
+        if use_lm_loss:
+          slm_hyp = self.slm_output(lm)
+          slm_hyp = slm_hyp[:,:-1,:]
+          slm_loss = torch.nn.functional.cross_entropy(slm_hyp.reshape(-1, slm_hyp.size(-1)), y_padded.view(-1))
+
         am = self.simple_am_proj(encoder_out)
 
         with torch.cuda.amp.autocast(enabled=False):
@@ -174,9 +194,16 @@ class Transducer(nn.Module):
 
         # am_pruned : [B, T, prune_range, encoder_dim]
         # lm_pruned : [B, T, prune_range, decoder_dim]
+        plm = self.joiner.decoder_proj(decoder_out)
+        
+        if use_lm_loss:
+          plm_hyp = self.plm_output(plm)
+          plm_hyp = plm_hyp[:,:-1,:]
+          plm_loss = torch.nn.functional.cross_entropy(plm_hyp.reshape(-1, plm_hyp.size(-1)), y_padded.view(-1))
+
         am_pruned, lm_pruned = k2.do_rnnt_pruning(
             am=self.joiner.encoder_proj(encoder_out),
-            lm=self.joiner.decoder_proj(decoder_out),
+            lm=plm,
             ranges=ranges,
         )
 
@@ -196,7 +223,7 @@ class Transducer(nn.Module):
                 reduction="sum",
             )
 
-        return (simple_loss, pruned_loss, ctc_output)
+        return (simple_loss, pruned_loss, ctc_output), (slm_loss, plm_loss)
 
     def decode(
         self,

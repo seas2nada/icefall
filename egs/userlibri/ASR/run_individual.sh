@@ -23,14 +23,14 @@ ft_model=./$model_dir/M_0/libri_prefinetuned.pt
 
 train_list=$(ls /DB/UserLibri/audio_data/speaker-wise-test)
 for individual in $train_list; do
-    expdir=./$model_dir/M_${individual}_oracle
-    pn=UserLibri_iter1
+    expdir=./$model_dir/M_${individual}_pn
+    pn=UserLibri_iter0
     if [ $stage -le 0 ] && [ $stop_stage -ge 0 ]; then
     log "Stage 0: Train model"
     ./pruned_transducer_stateless_d2v_dhver/train.py \
             --wandb False \
             --train-individual $individual \
-            --use-pseudo-labels False \
+            --use-pseudo-labels True \
             --on-the-fly-pseudo-labels False \
             --pseudo-name $pn \
             --load-prefinetuned-model $ft_model \
@@ -57,7 +57,7 @@ for individual in $train_list; do
             --peak-dec-lr 0.04175 \
             --peak-enc-lr 0.0003859 \
             --update-ema False \
-            --layer-average False
+            --layer-average True
     fi
 
     rm -rf $expdir/epoch-*

@@ -20,11 +20,12 @@ log() {
 
 model_dir=pruned_transducer_stateless_d2v_dhver
 ft_model=./$model_dir/M_0/libri_prefinetuned.pt
+# ft_model=./pruned_transducer_stateless_d2v_dhver/M_speaker-1995_pn/best-valid-loss.pt
 # ft_model=./d2v_transducer_text_encoder_finetuning/M_speaker-1995_text_ft_ce/best-valid-loss.pt
 individual="speaker-1995"
 
 expdir=./$model_dir/M_${individual}
-pn=pl_iter0
+pn=UserLibri_iter0
 if [ $stage -le 0 ] && [ $stop_stage -ge 0 ]; then
 log "Stage 0: Train model"
 ./pruned_transducer_stateless_d2v_dhver/train.py \
@@ -57,7 +58,7 @@ log "Stage 0: Train model"
         --peak-dec-lr 0.04175 \
         --peak-enc-lr 0.0003859 \
         --update-ema False \
-        --layer-average False
+        --layer-average True
 fi
 # --peak-dec-lr 0.04175 \
 # --peak-enc-lr 0.0003859 \

@@ -80,6 +80,7 @@ class Transducer(nn.Module):
         warmup: float = 1.0,
         reduction: str = "sum",
         delay_penalty: float = 0.0,
+        sp = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Args:
@@ -171,6 +172,15 @@ class Transducer(nn.Module):
                 return_grad=True,
             )
 
+        EP_loss = False
+        EP_simple_loss = 0
+        if EP_loss:
+          for batch_idx in range(len(y_padded)):
+            hyp = lm[batch_idx,1:y_lens[batch_idx] + 1].view(-1, lm.size(-1))
+            ref = y_padded[batch_idx, :y_lens[batch_idx]]
+            EP_simple_loss += torch.nn.functional.cross_entropy(hyp, ref)
+          EP_simple_loss = EP_simple_loss / len(y_padded)
+
         # ranges : [B, T, prune_range]
         ranges = k2.get_rnnt_prune_ranges(
             px_grad=px_grad,
@@ -181,17 +191,69 @@ class Transducer(nn.Module):
 
         # am_pruned : [B, T, prune_range, encoder_dim]
         # lm_pruned : [B, T, prune_range, decoder_dim]
+        joinder_decoder_input = self.joiner.decoder_proj(decoder_out)
+        joinder_encoder_input = self.joiner.encoder_proj(encoder_out)
+
+        # logit = am[0].argmax(-1).cpu().detach()
+        # logit = logit.unique_consecutive()
+        # logit = logit[torch.where(logit!=0)].tolist()
+        # print("-----encoder simple hyp------")
+        # print(sp.decode(logit))
+
+        # logit = self.joiner.output_linear(torch.tanh(joinder_encoder_input))
+        # logit = logit[0].argmax(-1).cpu().detach()
+        # logit = logit.unique_consecutive()
+        # logit = logit[torch.where(logit!=0)].tolist()
+        # print("-----encoder joiner hyp------")
+        # print(sp.decode(logit))
+        
+
+        # logit = self.joiner.output_linear(torch.tanh(joinder_decoder_input))
+        # logit = logit[0].argmax(-1).cpu().detach()
+        # logit = logit.unique_consecutive()
+        # logit = logit[torch.where(logit!=0)].tolist()
+        # print("-----decoder hyp------")
+        # print(sp.decode(logit))
+
+        # B, T, encoder_dim = joinder_encoder_input.shape
+        # B, S, decoder_dim = joinder_decoder_input.shape
+        # S = S - 1
+        # am = joinder_encoder_input.unsqueeze(2).expand((B, T, S, encoder_dim))
+        # lm = joinder_decoder_input.unsqueeze(1).expand((B, T, S + 1, decoder_dim))
+        # lm = lm[:,:,1:,:]
+        # logit = self.joiner.output_linear(torch.tanh(am + lm))
+        # logit = logit[0].argmax(-1).cpu().detach()
+        # logit = logit.unique_consecutive()
+        # logit = logit[torch.where(logit!=0)].tolist()
+        # print("-----joiner hyp------")
+        # print(sp.decode(logit))
+
         am_pruned, lm_pruned = k2.do_rnnt_pruning(
-            am=self.joiner.encoder_proj(encoder_out),
-            lm=self.joiner.decoder_proj(decoder_out),
+            am=joinder_encoder_input,
+            lm=joinder_decoder_input,
             ranges=ranges,
         )
+
+        EP_pruner_loss = 0
+        if EP_loss:
+          for batch_idx in range(len(y_padded)):
+            hyp = joinder_decoder_input[batch_idx,1:y_lens[batch_idx] + 1].view(-1, joinder_decoder_input.size(-1))
+            ref = y_padded[batch_idx, :y_lens[batch_idx]]
+            EP_pruner_loss += torch.nn.functional.cross_entropy(hyp, ref)
+          EP_pruner_loss = EP_pruner_loss / len(y_padded)
 
         # logits : [B, T, prune_range, vocab_size]
 
         # project_input=False since we applied the decoder's input projections
         # prior to do_rnnt_pruning (this is an optimization for speed).
         logits = self.joiner(am_pruned, lm_pruned, project_input=False)
+
+        # logit = logits[0].argmax(-1).cpu().detach()
+        # logit = logit.unique_consecutive()
+        # logit = logit[torch.where(logit!=0)].tolist()
+        # print("-----pruned joiner hyp------")
+        # print(sp.decode(logit))
+        # exit()
 
         with torch.cuda.amp.autocast(enabled=False):
             pruned_loss = k2.rnnt_loss_pruned(
@@ -204,4 +266,4 @@ class Transducer(nn.Module):
                 reduction=reduction,
             )
 
-        return (simple_loss, pruned_loss)
+        return (simple_loss, pruned_loss), (EP_simple_loss, EP_pruner_loss)

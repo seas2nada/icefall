@@ -3,6 +3,8 @@
 # fix segmentation fault reported in https://github.com/k2-fsa/icefall/issues/674
 export PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python
 
+. ../../../tools/activate_python.sh
+
 set -eou pipefail
 
 nj=15
@@ -102,7 +104,7 @@ if [ $stage -le 2 ] && [ $stop_stage -ge 2 ]; then
   log "Stage 2: Compute fbank for ${pseudo_name}"
   mkdir -p data/fbank
   if [ ! -e data/fbank/.${pseudo_name}.done ]; then
-    ./local/compute_fbank_pseudo.py ${dl_dir}/${pseudo_name}
+    ./local/compute_fbank_userlibri_pseudo.py --directory ${dl_dir}/${pseudo_name}
     touch data/fbank/.${pseudo_name}.done
   fi
 

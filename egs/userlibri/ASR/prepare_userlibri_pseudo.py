@@ -7,6 +7,7 @@ import zipfile
 from concurrent.futures.thread import ThreadPoolExecutor
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple, Union
+import sys
 
 from tqdm.auto import tqdm
 
@@ -123,7 +124,7 @@ def prepare_userlibri(
     # corpus_audio_dir = Path(corpus_dir + "/audio_data")
     # corpus_lm_dir = Path(corpus_dir + "/lm_data")
     # corpus_dir = Path(corpus_dir)
-    pn = corpus_dir.split("/")[1]
+    pn = corpus_dir.split("/")[-1]
 
     corpus_dir = Path(corpus_dir + "/audio_data")
     assert corpus_dir.is_dir(), f"No such directory: {corpus_dir}"

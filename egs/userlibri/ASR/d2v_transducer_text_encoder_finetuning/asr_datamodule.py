@@ -822,7 +822,7 @@ class UserLibriAsrDataModule:
         # Creating DataLoader
         dataloader = DataLoader(
             dataset,
-            batch_size=32,
+            batch_size=8,
             num_workers=self.args.num_workers,
             persistent_workers=False,
             worker_init_fn=worker_init_fn,

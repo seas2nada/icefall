@@ -946,104 +946,138 @@ def compute_loss(
             tok2word_dict[i] = token
             word2tok_dict[token] = i
 
-    x_token_ids_ = []
-    for x_token in x_token_ids:
-        token_list = x_token
-        if len(token_list) == 1:
-            x_token_ids_.append(token_list)
-            continue
-        
-        # set number of words to drop (or-to-replace)
-        # TODO: make it argument
-        drop_probability = 0.2
-        num_drops = max(1, int(drop_probability * len(token_list)))
-        drop_indices = np.random.randint(0,len(token_list), num_drops)
+    # TODO: make it argument
+    maksked_prediction = False
+    if maksked_prediction:
+        x_token_ids_ = []
+        for x_token in x_token_ids:
+            token_list = x_token
+            if len(token_list) == 1:
+                x_token_ids_.append(token_list)
+                continue
+            
+            # set number of words to drop (or-to-replace)
+            # TODO: make it argument
+            drop_probability = 0.2
+            num_drops = max(1, int(drop_probability * len(token_list)))
+            drop_indices = np.random.randint(0,len(token_list), num_drops)
 
-        # drop or replace words
-        # replace with random word with same word-length
-        for idx, token in enumerate(token_list):
-            if idx in drop_indices:
-                # TODO: may be to splitted words?
-                if tok2word_dict[token].startswith("▁"):
-                    # if len(tok2word_dict[token]) not in tokens_len_dict_ws.keys():
-                    #     token_list[idx] = 2
-                    # else:
-                    #     rand_idx = np.random.randint(0, len(tokens_len_dict_ws[len(tok2word_dict[token])]))
-                    #     token_list[idx] = word2tok_dict[tokens_len_dict_ws[len(tok2word_dict[token])][rand_idx]]
-                    token_list[idx] = 2
-                else:
-                    # if len(tok2word_dict[token]) not in tokens_len_dict_wos.keys():
-                    #     token_list[idx] = 2
-                    # else:
-                    #     rand_idx = np.random.randint(0, len(tokens_len_dict_wos[len(tok2word_dict[token])]))
-                    #     token_list[idx] = word2tok_dict[tokens_len_dict_wos[len(tok2word_dict[token])][rand_idx]]
-                    token_list[idx] = 2
+            # drop or replace words
+            # replace with random word with same word-length
+            for idx, token in enumerate(token_list):
+                if idx in drop_indices:
+                    # TODO: may be to splitted words?
+                    if tok2word_dict[token].startswith("▁"):
+                        # if len(tok2word_dict[token]) not in tokens_len_dict_ws.keys():
+                        #     token_list[idx] = 2
+                        # else:
+                        #     rand_idx = np.random.randint(0, len(tokens_len_dict_ws[len(tok2word_dict[token])]))
+                        #     token_list[idx] = word2tok_dict[tokens_len_dict_ws[len(tok2word_dict[token])][rand_idx]]
+                        token_list[idx] = 2
+                    else:
+                        # if len(tok2word_dict[token]) not in tokens_len_dict_wos.keys():
+                        #     token_list[idx] = 2
+                        # else:
+                        #     rand_idx = np.random.randint(0, len(tokens_len_dict_wos[len(tok2word_dict[token])]))
+                        #     token_list[idx] = word2tok_dict[tokens_len_dict_wos[len(tok2word_dict[token])][rand_idx]]
+                        token_list[idx] = 2
+            
+            x_token_ids_.append(token_list)
         
-        x_token_ids_.append(token_list)
+        x_token_ids = x_token_ids_
     
-    x_token_ids = x_token_ids_
+    else:
+        x_token_ids = y_token_ids
 
     # FIXME: error without these lines
     # x_texts = sp.decode(x_token_ids)
     # x_token_ids = sp.encode(x_texts, out_type=int)
     ### To here ###
 
+    segment = False
+    if segment:
+        segmented = []
+        for y_token_id in y_token_ids:
+            segment_range = len(y_token_id)//3 if len(y_token_id)//3 * 3 == len(y_token_id) else len(y_token_id)//3 + 1
+            for i in range(segment_range):
+                segmented.append(y_token_id[i*3:i*3+3])
+        y_token_ids = segmented
+        batch_size = len(y_token_ids)
+
     y = k2.RaggedTensor(y_token_ids).to(device)
-    x = k2.RaggedTensor(x_token_ids).to(device)
+
+    # TODO: make it argument
+    input_is_gaussian = True
+    if input_is_gaussian:
+        max_t = 0
+        for y_ in y_token_ids:
+            t_temp = len(y_)
+            if max_t < t_temp:
+                max_t = t_temp
+
+        size = (batch_size, max_t * 10, params.encoder_dim)
+        variance = 0.05
+        x = torch.randn(size).to(device) * variance**0.5
+    else:
+        x = k2.RaggedTensor(x_token_ids).to(device)
 
     with torch.set_grad_enabled(is_training):
-        simple_loss = model(
+        simple_loss, pruned_loss, x_lens = model(
             x=x,
             y=y,
             lm_scale=params.lm_scale,
+            am_scale=params.lm_scale,
+            prune_range=params.prune_range,
             blank_id=params.blank_id,
-            use_ctc=True,
+            use_ctc=False,
+            input_is_gaussian=input_is_gaussian,
+
         )
 
         s = params.simple_loss_scale
-        # take down the scale on the simple loss from 1.0 at the start
-        # to params.simple_loss scale by warm_step.
-        simple_loss_scale = (
-            s
-            if batch_idx_train >= warm_step
-            else 1.0 - (batch_idx_train / warm_step) * (1.0 - s)
-        )
-        pruned_loss_scale = (
-            1.0
-            if batch_idx_train >= warm_step
-            else 0.1 + 0.9 * (batch_idx_train / warm_step)
-        )
+        # # take down the scale on the simple loss from 1.0 at the start
+        # # to params.simple_loss scale by warm_step.
+        # simple_loss_scale = (
+        #     s
+        #     if batch_idx_train >= warm_step
+        #     else 1.0 - (batch_idx_train / warm_step) * (1.0 - s)
+        # )
+        # pruned_loss_scale = (
+        #     1.0
+        #     if batch_idx_train >= warm_step
+        #     else 0.1 + 0.9 * (batch_idx_train / warm_step)
+        # )
+        simple_loss_scale = 1
+        pruned_loss_scale = 0
 
-        # loss = simple_loss_scale * simple_loss + pruned_loss_scale * pruned_loss
-        loss = simple_loss_scale * simple_loss
+        loss = simple_loss_scale * simple_loss + pruned_loss_scale * pruned_loss
     
     info = MetricsTracker()
     
     assert loss.requires_grad == is_training
 
-    # if not is_training:
-    #     model.eval()
-    #     with torch.no_grad():
-    #         if not params.on_the_fly_pseudo_labels:
-    #             hypos = model(
-    #                 x=x,
-    #                 y=y,
-    #                 lm_scale=params.lm_scale,
-    #                 return_hyp=True,
-    #             ).detach().cpu()
-    #             hypos_ = [hyp[torch.where(hyp!=0)].tolist() for hyp in hypos]
-    #             hypos_ = sp.decode(hypos_)
-    #             hypo = " ".join(hypos_[0]).replace("   ", "|").replace(" ", "").replace("|", " ")
+    if not is_training:
+        model.eval()
+        with torch.no_grad():
+            if not params.on_the_fly_pseudo_labels:
+                hypos = model.module.decode(
+                    x=x,
+                    x_lens=x_lens,
+                    y=y,
+                    sp=sp,
+                )
+                hypo = " ".join(hypos[0])
             
-    #         logging.info(f'ref: {batch[0]}')
-    #         logging.info(f'hyp: {hypo}')
-    #     model.train()
+            ref = batch[0] if not segment else sp.decode(segmented[0])
+            logging.info(f'ref: {ref}')
+            logging.info(f'hyp: {hypo}')
+        model.train()
 
     # Note: We use reduction=sum while computing the loss.
     info["batches"] = batch_size
     info["loss"] = loss.detach().cpu().item()
     info["simple_loss"] = simple_loss.detach().cpu().item()
-    # info["pruned_loss"] = pruned_loss.detach().cpu().item()
+    info["pruned_loss"] = pruned_loss.detach().cpu().item()
 
     return loss, info
 

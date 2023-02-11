@@ -23,7 +23,7 @@ ft_model=./pruned_transducer_stateless_d2v_dhver/M_0/libri_prefinetuned.pt
 model_dir=d2v_transducer_text_encoder_finetuning
 individual="speaker-1995"
 
-expdir=./$model_dir/M_${individual}_text_ft_ce
+expdir=./$model_dir/M_${individual}_text_ft_gaussian
 pn=UserLibri_iter1
 if [ $stage -le 0 ] && [ $stop_stage -ge 0 ]; then
 log "Stage 0: Train model"
@@ -45,7 +45,7 @@ log "Stage 0: Train model"
         --decoder-dim 768 \
         --joiner-dim 768 \
         --use-fp16 1 \
-        --accum-grads 4 \
+        --accum-grads 16 \
         --encoder-type d2v \
         --additional-block True \
         --prune-range 10 \

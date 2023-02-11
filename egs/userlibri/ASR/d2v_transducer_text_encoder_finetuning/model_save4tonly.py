@@ -77,14 +77,10 @@ class Transducer(nn.Module):
             nn.LogSoftmax(dim=-1),
         )
 
-        self.project_gaussian = nn.Linear(encoder_dim, encoder_dim)
-
     def forward(
         self,
         x: k2.RaggedTensor,
         y: k2.RaggedTensor,
-        prune_range: int = 5,
-        am_scale: float = 0.0,
         lm_scale: float = 0.0,
         return_hyp: bool = False,
         blank_id: int = 0,
@@ -122,88 +118,101 @@ class Transducer(nn.Module):
         # Now for the decoder, i.e., the prediction network
         row_splits = y.shape.row_splits(1)
         y_lens = row_splits[1:] - row_splits[:-1]
-        x_lens = y_lens * 10
+        row_splits = x.shape.row_splits(1)
+        x_lens = row_splits[1:] - row_splits[:-1]
 
         blank_id = self.decoder.blank_id
 
-        sos_y = add_sos(y, sos_id=blank_id)
+        # make target
+        with torch.no_grad():
+          sos_y = add_sos(y, sos_id=blank_id)
+
+          # sos_y_padded: [B, S + 1], start with SOS.
+          sos_y_padded = sos_y.pad(mode="constant", padding_value=blank_id)
+
+          # decoder_out: [B, S + 1, decoder_dim]
+          decoder_out_y = self.decoder(sos_y_padded)
+
+          lm_y = self.simple_lm_proj(decoder_out_y)
+          prune_lm_y = self.joiner.decoder_proj(decoder_out_y)
+
+        sos_x = add_sos(x, sos_id=blank_id)
 
         # sos_y_padded: [B, S + 1], start with SOS.
-        sos_y_padded = sos_y.pad(mode="constant", padding_value=blank_id)
+        sos_x_padded = sos_x.pad(mode="constant", padding_value=blank_id)
 
         # decoder_out: [B, S + 1, decoder_dim]
-        decoder_out = self.decoder(sos_y_padded)
-
-        lm = self.simple_lm_proj(decoder_out)
-        prune_lm = self.joiner.decoder_proj(decoder_out)
+        decoder_out = self.decoder(sos_x_padded)
 
         # Note: y does not start with SOS
         # y_padded : [B, S]
         y_padded = y.pad(mode="constant", padding_value=0)
         y_padded = y_padded.to(torch.int64)
-        boundary = torch.zeros((x.size(0), 4), dtype=torch.int64, device=x.device)
-        boundary[:, 2] = y_lens
-        boundary[:, 3] = x_lens
+        # boundary = torch.zeros((x.size(0), 4), dtype=torch.int64, device=x.device)
+        # boundary[:, 2] = y_lens
+        # boundary[:, 3] = x_lens
 
         lm = self.simple_lm_proj(decoder_out)
-        # prune_lm = self.joiner.decoder_proj(decoder_out)
-
-        # encoder_out = self.project_gaussian(x)
+        prune_lm = self.joiner.decoder_proj(decoder_out)
+        if return_hyp:
+          return lm[:,1:,:].argmax(-1)
         # am = self.simple_am_proj(encoder_out)
 
-        encoder_out = x
-        with torch.no_grad():
-          am = self.simple_am_proj(encoder_out)
-          am_scale = 0.0
+        # if use_ctc:
+        #   # TODO: CTC loss for word-replacement
+        #   lprobs = torch.nn.functional.log_softmax(lm[:,1:,:].float(), dim=-1)
 
-        with torch.cuda.amp.autocast(enabled=False):
-            simple_loss, (px_grad, py_grad) = k2.rnnt_loss_smoothed(
-                lm=lm.float(),
-                am=am.float(),
-                symbols=y_padded,
-                termination_symbol=blank_id,
-                lm_only_scale=lm_scale,
-                am_only_scale=am_scale,
-                boundary=boundary,
-                reduction="sum",
-                return_grad=True,
-            )
+        #   loss = torch.nn.functional.ctc_loss(
+        #     lprobs.transpose(0,1), # T,B,C
+        #     torch.tensor(y_padded),  # B,T
+        #     x_lens,
+        #     y_lens,
+        #     blank=blank_id,
+        #     reduction="mean"
+        #     )
+        #   loss = loss * 0.00001
 
-        # ranges : [B, T, prune_range]
-        ranges = k2.get_rnnt_prune_ranges(
-            px_grad=px_grad,
-            py_grad=py_grad,
-            boundary=boundary,
-            s_range=prune_range,
-        )
+        # else:
+        #   loss = torch.nn.functional.cross_entropy(lm[:,1:,:].reshape(-1, lm.size(-1)), y_padded.view(-1))
 
-        # am_pruned : [B, T, prune_range, encoder_dim]
-        # lm_pruned : [B, T, prune_range, decoder_dim]
-        # with torch.no_grad():
-        #   am = self.joiner.encoder_proj(encoder_out)
-        am = self.joiner.encoder_proj(encoder_out)
-        am_pruned, lm_pruned = k2.do_rnnt_pruning(
-            am=am,
-            lm=self.joiner.decoder_proj(decoder_out),
-            ranges=ranges,
-        )
+        # loss = torch.nn.functional.cross_entropy(lm[:,1:,:].reshape(-1, lm.size(-1)), y_padded.view(-1))
 
-        # logits : [B, T, prune_range, vocab_size]
+        loss = torch.nn.functional.mse_loss(lm, lm_y)
+        loss += torch.nn.functional.mse_loss(prune_lm, prune_lm_y)
 
-        # project_input=False since we applied the decoder's input projections
-        # prior to do_rnnt_pruning (this is an optimization for speed).
-        logits = self.joiner(am_pruned, lm_pruned, project_input=False)
+        # TODO: we need lm_pruned to be trained too
+        # # ranges : [B, T, prune_range]
+        # ranges = k2.get_rnnt_prune_ranges(
+        #     px_grad=px_grad,
+        #     py_grad=py_grad,
+        #     boundary=boundary,
+        #     s_range=prune_range,
+        # )
 
-        with torch.cuda.amp.autocast(enabled=False):
-            pruned_loss = k2.rnnt_loss_pruned(
-                logits=logits.float(),
-                symbols=y_padded,
-                ranges=ranges,
-                termination_symbol=blank_id,
-                boundary=boundary,
-                reduction="sum",
-            )
-        return (simple_loss, pruned_loss, x_lens)
+        # # am_pruned : [B, T, prune_range, encoder_dim]
+        # # lm_pruned : [B, T, prune_range, decoder_dim]
+        # am_pruned, lm_pruned = k2.do_rnnt_pruning(
+        #     am=self.joiner.encoder_proj(encoder_out),
+        #     lm=self.joiner.decoder_proj(decoder_out),
+        #     ranges=ranges,
+        # )
+
+        # # logits : [B, T, prune_range, vocab_size]
+
+        # # project_input=False since we applied the decoder's input projections
+        # # prior to do_rnnt_pruning (this is an optimization for speed).
+        # logits = self.joiner(am_pruned, lm_pruned, project_input=False)
+
+        # with torch.cuda.amp.autocast(enabled=False):
+        #     pruned_loss = k2.rnnt_loss_pruned(
+        #         logits=logits.float(),
+        #         symbols=y_padded,
+        #         ranges=ranges,
+        #         termination_symbol=blank_id,
+        #         boundary=boundary,
+        #         reduction="sum",
+        #     )
+        return loss
 
     def decode(
         self,
@@ -216,7 +225,7 @@ class Transducer(nn.Module):
     ):
         from beam_search import greedy_search_batch, ctc_greedy_search, modified_beam_search, fast_beam_search_nbest, fast_beam_search_nbest_LG
 
-        encoder_out, x_lens = x, x_lens
+        encoder_out, x_lens = self.encoder(x, x_lens)
 
         hyps = []
         if "fast_beam_search_nbest" in method:
