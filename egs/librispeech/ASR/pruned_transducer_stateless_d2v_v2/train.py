@@ -831,7 +831,7 @@ def compute_loss(
     
     info = MetricsTracker()
     
-    if params.ctc_loss_scale > 0:
+    if params.ctc_loss_scale > 0 and ctc_output is not None:
         # Compute ctc loss
 
         # NOTE: We need `encode_supervisions` to sort sequences with

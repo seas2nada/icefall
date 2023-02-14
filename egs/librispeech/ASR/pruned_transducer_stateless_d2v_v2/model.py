@@ -25,6 +25,8 @@ from encoder_interface import EncoderInterface
 
 from icefall.utils import add_sos
 
+import contextlib
+import numpy as np
 
 class Transducer(nn.Module):
     """It implements https://arxiv.org/pdf/1211.3711.pdf
@@ -130,15 +132,37 @@ class Transducer(nn.Module):
 
         assert x.size(0) == x_lens.size(0) == y.dim0
 
-        encoder_out, x_lens = self.encoder(x, x_lens)
+        gaussian = True
+        gaussian_prob = 0.1
+        curr_prob = np.random.random()
+        use_gaussian = gaussian and curr_prob < gaussian_prob
+        
+        with torch.no_grad() if use_gaussian else contextlib.nullcontext():
+          encoder_out, x_lens = self.encoder(x, x_lens)
+
+        if use_gaussian:
+          device = encoder_out.device
+          s_embedding_size = encoder_out.size()
+          encoder_out = x.new_zeros(s_embedding_size)
+          variance = 0.05
+          for b_idx, encoder_out_ in enumerate(encoder_out):
+            # encoder_out[b_idx, :x_lens[b_idx]] = torch.randn((1, x_lens[b_idx], encoder_out.size(-1))).to(device) * variance**0.5
+            encoder_out[b_idx, :x_lens[b_idx]] = torch.zeros((1, x_lens[b_idx], encoder_out.size(-1))).to(device)
+          
+          lm_scale = 1.0
+          am_scale = 0.0
+
         assert torch.all(x_lens > 0)
 
-        use_lm_loss = False
+        use_lm_loss = True
         slm_loss = None
         plm_loss = None
 
         # compute ctc log-probs
-        ctc_output = self.ctc_output(encoder_out)
+        if not use_gaussian:
+          ctc_output = self.ctc_output(encoder_out)
+        else:
+          ctc_output = None
 
         # Now for the decoder, i.e., the prediction network
         row_splits = y.shape.row_splits(1)
@@ -169,7 +193,8 @@ class Transducer(nn.Module):
           slm_hyp = slm_hyp[:,:-1,:]
           slm_loss = torch.nn.functional.cross_entropy(slm_hyp.reshape(-1, slm_hyp.size(-1)), y_padded.view(-1))
 
-        am = self.simple_am_proj(encoder_out)
+        with torch.no_grad() if use_gaussian else contextlib.nullcontext():
+          am = self.simple_am_proj(encoder_out)
 
         with torch.cuda.amp.autocast(enabled=False):
             simple_loss, (px_grad, py_grad) = k2.rnnt_loss_smoothed(
@@ -194,6 +219,8 @@ class Transducer(nn.Module):
 
         # am_pruned : [B, T, prune_range, encoder_dim]
         # lm_pruned : [B, T, prune_range, decoder_dim]
+        with torch.no_grad() if use_gaussian else contextlib.nullcontext():
+          pam = self.joiner.encoder_proj(encoder_out)
         plm = self.joiner.decoder_proj(decoder_out)
         
         if use_lm_loss:
@@ -202,7 +229,7 @@ class Transducer(nn.Module):
           plm_loss = torch.nn.functional.cross_entropy(plm_hyp.reshape(-1, plm_hyp.size(-1)), y_padded.view(-1))
 
         am_pruned, lm_pruned = k2.do_rnnt_pruning(
-            am=self.joiner.encoder_proj(encoder_out),
+            am=pam,
             lm=plm,
             ranges=ranges,
         )
@@ -211,7 +238,7 @@ class Transducer(nn.Module):
 
         # project_input=False since we applied the decoder's input projections
         # prior to do_rnnt_pruning (this is an optimization for speed).
-        logits = self.joiner(am_pruned, lm_pruned, project_input=False)
+        logits = self.joiner(am_pruned, lm_pruned, project_input=False, use_text_only=use_gaussian)
 
         with torch.cuda.amp.autocast(enabled=False):
             pruned_loss = k2.rnnt_loss_pruned(

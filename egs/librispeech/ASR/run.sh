@@ -19,7 +19,7 @@ log() {
   echo -e "$(date '+%Y-%m-%d %H:%M:%S') (${fname}:${BASH_LINENO[0]}:${FUNCNAME[1]}) $*"
 }
 
-expdir=pruned_transducer_stateless_d2v_v2/d2v-T-reproduce
+expdir=pruned_transducer_stateless_d2v_v2/d2v-T_uselm_gaussian
 if [ $stage -le 0 ] && [ $stop_stage -ge 0 ]; then
   log "Stage 0: Train model"
   ./pruned_transducer_stateless_d2v_v2/train.py \
@@ -56,7 +56,7 @@ if [ $stage -le 1 ] && [ $stop_stage -ge 1 ]; then
       --input-strategy AudioSamples \
       --enable-spec-aug False \
       --additional-block True \
-      --model-name epoch-27.pt \
+      --model-name best-valid-loss.pt \
       --exp-dir $expdir \
       --max-duration 400 \
       --decoding-method $method \
