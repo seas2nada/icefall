@@ -27,7 +27,7 @@ if [ $stage -le 0 ] && [ $stop_stage -ge 0 ]; then
         --input-strategy AudioSamples \
         --enable-spec-aug False \
         --multi-optim True \
-        --start-epoch 1 \
+        --start-epoch 20 \
         --world-size 4 \
         --num-epochs 30 \
         --full-libri 1 \
@@ -44,7 +44,7 @@ if [ $stage -le 0 ] && [ $stop_stage -ge 0 ]; then
         --prune-range 10 \
         --context-size 2 \
         --ctc-loss-scale 0.2 \
-        --peak-dec-lr 0.04175 \
+        --peak-dec-lr 0.001 \
         --peak-enc-lr 0.0003859
 fi
 

@@ -825,7 +825,10 @@ def compute_loss(
             else 0.1 + 0.9 * (batch_idx_train / warm_step)
         )
 
-        loss = simple_loss_scale * simple_loss + pruned_loss_scale * pruned_loss
+        if pruned_loss is not None:
+            loss = simple_loss_scale * simple_loss + pruned_loss_scale * pruned_loss
+        else:
+            loss = simple_loss
         if slm_loss is not None:
             loss += simple_loss_scale * 100 * slm_loss + pruned_loss_scale * 100 * plm_loss
     
@@ -888,7 +891,8 @@ def compute_loss(
     info["utterances"] = feature.size(0)
     info["loss"] = loss.detach().cpu().item()
     info["simple_loss"] = simple_loss.detach().cpu().item()
-    info["pruned_loss"] = pruned_loss.detach().cpu().item()
+    if pruned_loss is not None:
+        info["pruned_loss"] = pruned_loss.detach().cpu().item()
     if slm_loss is not None:
         info["slm_loss"] = slm_loss.detach().cpu().item()
         info["plm_loss"] = plm_loss.detach().cpu().item()

@@ -133,9 +133,9 @@ class Transducer(nn.Module):
         assert x.size(0) == x_lens.size(0) == y.dim0
 
         gaussian = True
-        gaussian_prob = 0.1
+        gaussian_prob = 0.2
         curr_prob = np.random.random()
-        use_gaussian = gaussian and curr_prob < gaussian_prob
+        use_gaussian = gaussian and curr_prob < gaussian_prob and self.training
         
         with torch.no_grad() if use_gaussian else contextlib.nullcontext():
           encoder_out, x_lens = self.encoder(x, x_lens)
@@ -148,13 +148,10 @@ class Transducer(nn.Module):
           for b_idx, encoder_out_ in enumerate(encoder_out):
             # encoder_out[b_idx, :x_lens[b_idx]] = torch.randn((1, x_lens[b_idx], encoder_out.size(-1))).to(device) * variance**0.5
             encoder_out[b_idx, :x_lens[b_idx]] = torch.zeros((1, x_lens[b_idx], encoder_out.size(-1))).to(device)
-          
-          lm_scale = 1.0
-          am_scale = 0.0
 
         assert torch.all(x_lens > 0)
 
-        use_lm_loss = True
+        use_lm_loss = False
         slm_loss = None
         plm_loss = None
 
@@ -186,69 +183,22 @@ class Transducer(nn.Module):
         boundary[:, 2] = y_lens
         boundary[:, 3] = x_lens
 
-        lm = self.simple_lm_proj(decoder_out)
-        
-        if use_lm_loss:
-          slm_hyp = self.slm_output(lm)
-          slm_hyp = slm_hyp[:,:-1,:]
-          slm_loss = torch.nn.functional.cross_entropy(slm_hyp.reshape(-1, slm_hyp.size(-1)), y_padded.view(-1))
-
-        with torch.no_grad() if use_gaussian else contextlib.nullcontext():
-          am = self.simple_am_proj(encoder_out)
-
-        with torch.cuda.amp.autocast(enabled=False):
-            simple_loss, (px_grad, py_grad) = k2.rnnt_loss_smoothed(
-                lm=lm.float(),
-                am=am.float(),
-                symbols=y_padded,
-                termination_symbol=blank_id,
-                lm_only_scale=lm_scale,
-                am_only_scale=am_scale,
-                boundary=boundary,
-                reduction="sum",
-                return_grad=True,
-            )
-
-        # ranges : [B, T, prune_range]
-        ranges = k2.get_rnnt_prune_ranges(
-            px_grad=px_grad,
-            py_grad=py_grad,
-            boundary=boundary,
-            s_range=prune_range,
-        )
-
-        # am_pruned : [B, T, prune_range, encoder_dim]
-        # lm_pruned : [B, T, prune_range, decoder_dim]
-        with torch.no_grad() if use_gaussian else contextlib.nullcontext():
-          pam = self.joiner.encoder_proj(encoder_out)
-        plm = self.joiner.decoder_proj(decoder_out)
-        
-        if use_lm_loss:
-          plm_hyp = self.plm_output(plm)
-          plm_hyp = plm_hyp[:,:-1,:]
-          plm_loss = torch.nn.functional.cross_entropy(plm_hyp.reshape(-1, plm_hyp.size(-1)), y_padded.view(-1))
-
-        am_pruned, lm_pruned = k2.do_rnnt_pruning(
-            am=pam,
-            lm=plm,
-            ranges=ranges,
-        )
-
         # logits : [B, T, prune_range, vocab_size]
 
         # project_input=False since we applied the decoder's input projections
         # prior to do_rnnt_pruning (this is an optimization for speed).
-        logits = self.joiner(am_pruned, lm_pruned, project_input=False, use_text_only=use_gaussian)
+        logits = self.joiner(encoder_out, decoder_out, use_text_only=use_gaussian)
 
-        with torch.cuda.amp.autocast(enabled=False):
-            pruned_loss = k2.rnnt_loss_pruned(
-                logits=logits.float(),
-                symbols=y_padded,
-                ranges=ranges,
-                termination_symbol=blank_id,
-                boundary=boundary,
-                reduction="sum",
-            )
+        loss = torchaudio.functional.rnnt_loss(
+            logits=logits,
+            targets=y_padded,
+            logit_lengths=x_lens,
+            target_lengths=y_lens,
+            blank=blank_id,
+            reduction="sum",
+        )
+        simple_loss = loss
+        pruned_loss = slm_loss = plm_loss = None
 
         return (simple_loss, pruned_loss, ctc_output), (slm_loss, plm_loss)
 

@@ -34,7 +34,8 @@ class Joiner(nn.Module):
 
         # param = torch.ones(joiner_dim, joiner_dim)
         # self.decoder_only_scale = nn.Parameter(param)
-        self.decoder_only_norm = nn.LayerNorm(joiner_dim)
+        # self.decoder_only_norm = nn.LayerNorm(joiner_dim)
+        self.decoder_only_layer = nn.Linear(joiner_dim, joiner_dim)
 
     def forward(
         self,
@@ -67,7 +68,7 @@ class Joiner(nn.Module):
         
         if use_text_only:
             # logit = logit * self.decoder_only_scale
-            logit = self.decoder_only_norm(logit)
+            logit = self.decoder_only_layer(logit)
 
         logit = self.output_linear(torch.tanh(logit))
 
