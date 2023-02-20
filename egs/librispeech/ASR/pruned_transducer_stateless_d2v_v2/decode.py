@@ -58,6 +58,7 @@ from beam_search import (
     greedy_search,
     greedy_search_batch,
     modified_beam_search,
+    modified_combined_beam_search,
 )
 from train import add_model_arguments, add_rep_arguments, get_params, get_transducer_model
 
@@ -158,6 +159,7 @@ def get_parser():
           - greedy_search
           - beam_search
           - modified_beam_search
+          - modified_combined_beam_search
           - fast_beam_search
           - fast_beam_search_nbest
           - fast_beam_search_nbest_oracle
@@ -427,6 +429,15 @@ def decode_one_batch(
         )
         for hyp in sp.decode(hyp_tokens):
             hyps.append(hyp.split())
+    elif params.decoding_method == "modified_combined_beam_search":
+        hyp_tokens = modified_combined_beam_search(
+            model=model,
+            encoder_out=encoder_out,
+            encoder_out_lens=encoder_out_lens,
+            beam=params.beam_size,
+        )
+        for hyp in sp.decode(hyp_tokens):
+            hyps.append(hyp.split())
     else:
         batch_size = encoder_out.size(0)
 
@@ -607,6 +618,7 @@ def main():
         "fast_beam_search_nbest_LG",
         "fast_beam_search_nbest_oracle",
         "modified_beam_search",
+        "modified_combined_beam_search",
     )
     params.res_dir = params.exp_dir / params.decoding_method
 

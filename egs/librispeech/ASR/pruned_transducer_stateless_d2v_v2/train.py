@@ -802,7 +802,7 @@ def compute_loss(
     y = k2.RaggedTensor(token_ids).to(device)
 
     with torch.set_grad_enabled(is_training):
-        (simple_loss, pruned_loss, ctc_output), (slm_loss, plm_loss) = model(
+        (simple_loss, pruned_loss, ctc_output), lm_loss = model(
             x=feature,
             x_lens=feature_lens,
             y=y,
@@ -826,8 +826,8 @@ def compute_loss(
         )
 
         loss = simple_loss_scale * simple_loss + pruned_loss_scale * pruned_loss
-        if slm_loss is not None:
-            loss += simple_loss_scale * 100 * slm_loss + pruned_loss_scale * 100 * plm_loss
+        if lm_loss is not None:
+            loss += lm_loss * 100
     
     info = MetricsTracker()
     
@@ -889,9 +889,8 @@ def compute_loss(
     info["loss"] = loss.detach().cpu().item()
     info["simple_loss"] = simple_loss.detach().cpu().item()
     info["pruned_loss"] = pruned_loss.detach().cpu().item()
-    if slm_loss is not None:
-        info["slm_loss"] = slm_loss.detach().cpu().item()
-        info["plm_loss"] = plm_loss.detach().cpu().item()
+    if lm_loss is not None:
+        info["lm_loss"] = lm_loss.detach().cpu().item()
 
     return loss, info
 
@@ -1086,13 +1085,11 @@ def train_one_epoch(
             if cur_grad_scale < 0.01:
                 logging.warning(f"Grad scale is small: {cur_grad_scale}")
             if cur_grad_scale < 1.0e-05:
-                wb.log({"valid/loss": 10000})
                 raise RuntimeError(
                     f"grad_scale is too small, exiting: {cur_grad_scale}"
                 )
 
         if params.batch_idx_train > 4000 and loss > 300:
-            wb.log({"valid/loss": 10000})
             raise RunteimError(
                     f"divergence... exiting: loss={loss}"
                 )
@@ -1270,6 +1267,9 @@ def run(rank, world_size, args, wb=None):
                 enc_names.append(n)
                 enc_param.append(p)
             elif 'feature_extractor' not in n:
+                dec_names.append(n)
+                dec_param.append(p)
+            else:
                 dec_names.append(n)
                 dec_param.append(p)
 

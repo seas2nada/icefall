@@ -19,7 +19,7 @@ log() {
   echo -e "$(date '+%Y-%m-%d %H:%M:%S') (${fname}:${BASH_LINENO[0]}:${FUNCNAME[1]}) $*"
 }
 
-expdir=pruned_transducer_stateless_d2v_v2/d2v-T-reproduce
+expdir=pruned_transducer_stateless_d2v_v2/d2v-T_modality-combine-additional-embedding
 if [ $stage -le 0 ] && [ $stop_stage -ge 0 ]; then
   log "Stage 0: Train model"
   ./pruned_transducer_stateless_d2v_v2/train.py \
@@ -33,7 +33,7 @@ if [ $stage -le 0 ] && [ $stop_stage -ge 0 ]; then
         --full-libri 1 \
         --exp-dir $expdir \
         --max-duration 150 \
-        --freeze-finetune-updates 3000 \
+        --freeze-finetune-updates 0 \
         --encoder-dim 768 \
         --decoder-dim 768 \
         --joiner-dim 768 \
@@ -44,19 +44,19 @@ if [ $stage -le 0 ] && [ $stop_stage -ge 0 ]; then
         --prune-range 10 \
         --context-size 2 \
         --ctc-loss-scale 0.2 \
-        --peak-dec-lr 0.04175 \
+        --peak-dec-lr 0.004175 \
         --peak-enc-lr 0.0003859
 fi
 
 if [ $stage -le 1 ] && [ $stop_stage -ge 1 ]; then
   log "Stage 1: Decoding"
-  # modified_beam_search, greedy_search, ctc_greedy_search
-  for method in modified_beam_search; do
+  # modified_beam_search, greedy_search, ctc_greedy_search, modified_combined_beam_search
+  for method in modified_combined_beam_search; do
       ./pruned_transducer_stateless_d2v_v2/decode.py \
       --input-strategy AudioSamples \
       --enable-spec-aug False \
       --additional-block True \
-      --model-name epoch-27.pt \
+      --model-name best-valid-loss.pt \
       --exp-dir $expdir \
       --max-duration 400 \
       --decoding-method $method \
