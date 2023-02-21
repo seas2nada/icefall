@@ -19,7 +19,7 @@ log() {
   echo -e "$(date '+%Y-%m-%d %H:%M:%S') (${fname}:${BASH_LINENO[0]}:${FUNCNAME[1]}) $*"
 }
 
-expdir=pruned_transducer_stateless_d2v_v2/d2v-T_modality-combine-additional-embedding
+expdir=pruned_transducer_stateless_d2v_v2/d2v-T_spellcorrector_spelldisrupter
 if [ $stage -le 0 ] && [ $stop_stage -ge 0 ]; then
   log "Stage 0: Train model"
   ./pruned_transducer_stateless_d2v_v2/train.py \
