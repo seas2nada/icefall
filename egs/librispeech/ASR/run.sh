@@ -19,7 +19,7 @@ log() {
   echo -e "$(date '+%Y-%m-%d %H:%M:%S') (${fname}:${BASH_LINENO[0]}:${FUNCNAME[1]}) $*"
 }
 
-expdir=pruned_transducer_stateless_d2v_v2/d2v-T_uselm_gaussian
+expdir=pruned_transducer_stateless_d2v_v2/d2v-T_zero-input-torchrnnt-lstmdec
 if [ $stage -le 0 ] && [ $stop_stage -ge 0 ]; then
   log "Stage 0: Train model"
   ./pruned_transducer_stateless_d2v_v2/train.py \
@@ -27,13 +27,13 @@ if [ $stage -le 0 ] && [ $stop_stage -ge 0 ]; then
         --input-strategy AudioSamples \
         --enable-spec-aug False \
         --multi-optim True \
-        --start-epoch 20 \
+        --start-epoch 1 \
         --world-size 4 \
         --num-epochs 30 \
         --full-libri 1 \
         --exp-dir $expdir \
         --max-duration 150 \
-        --freeze-finetune-updates 3000 \
+        --freeze-finetune-updates 0 \
         --encoder-dim 768 \
         --decoder-dim 768 \
         --joiner-dim 768 \

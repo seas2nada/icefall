@@ -21,6 +21,7 @@ import logging
 import k2
 import torch
 import torch.nn as nn
+import torchaudio
 from encoder_interface import EncoderInterface
 
 from icefall.utils import add_sos
@@ -172,23 +173,23 @@ class Transducer(nn.Module):
         sos_y_padded = sos_y.pad(mode="constant", padding_value=blank_id)
 
         # decoder_out: [B, S + 1, decoder_dim]
-        decoder_out = self.decoder(sos_y_padded)
+        # decoder_out = self.decoder(sos_y_padded)
+        decoder_out = self.decoder(sos_y_padded, y_lens, need_pad=False)
 
         # Note: y does not start with SOS
         # y_padded : [B, S]
         y_padded = y.pad(mode="constant", padding_value=0)
 
-        y_padded = y_padded.to(torch.int64)
-        boundary = torch.zeros((x.size(0), 4), dtype=torch.int64, device=x.device)
-        boundary[:, 2] = y_lens
-        boundary[:, 3] = x_lens
-
         # logits : [B, T, prune_range, vocab_size]
 
         # project_input=False since we applied the decoder's input projections
         # prior to do_rnnt_pruning (this is an optimization for speed).
+        encoder_out = encoder_out.unsqueeze(2)
+        decoder_out = decoder_out.unsqueeze(1)
         logits = self.joiner(encoder_out, decoder_out, use_text_only=use_gaussian)
 
+        x_lens = x_lens.to(torch.int32)
+        y_lens = y_lens.to(torch.int32)
         loss = torchaudio.functional.rnnt_loss(
             logits=logits,
             targets=y_padded,
@@ -209,12 +210,12 @@ class Transducer(nn.Module):
         y: k2.RaggedTensor,
         sp,
     ):
-        from beam_search import greedy_search_batch
+        from beam_search import beam_search
 
         encoder_out, x_lens = self.encoder(x, x_lens)
 
         hyps = []
-        hyp_tokens = greedy_search_batch(self, encoder_out, x_lens)
+        hyp_tokens = beam_search(self, encoder_out)
 
         for hyp in sp.decode(hyp_tokens):
             hyps.append(hyp.split())
