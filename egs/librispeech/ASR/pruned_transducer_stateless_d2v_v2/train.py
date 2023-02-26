@@ -595,11 +595,18 @@ def get_encoder_model(params: AttributeDict) -> nn.Module:
 
 
 def get_decoder_model(params: AttributeDict) -> nn.Module:
+    # decoder = Decoder(
+    #     vocab_size=params.vocab_size,
+    #     decoder_dim=params.decoder_dim,
+    #     blank_id=params.blank_id,
+    #     context_size=params.context_size,
+    # )
     decoder = Decoder(
         vocab_size=params.vocab_size,
-        decoder_dim=params.decoder_dim,
+        embedding_dim=params.decoder_dim,
+        hidden_dim=params.decoder_dim,
+        num_layers=2,
         blank_id=params.blank_id,
-        context_size=params.context_size,
     )
     return decoder
 
@@ -802,7 +809,7 @@ def compute_loss(
     y = k2.RaggedTensor(token_ids).to(device)
 
     with torch.set_grad_enabled(is_training):
-        (simple_loss, pruned_loss, ctc_output), (slm_loss, plm_loss) = model(
+        (simple_loss, pruned_loss, ctc_output), (nll_loss) = model(
             x=feature,
             x_lens=feature_lens,
             y=y,
@@ -826,12 +833,15 @@ def compute_loss(
         )
 
         loss = simple_loss_scale * simple_loss + pruned_loss_scale * pruned_loss
-        if slm_loss is not None:
-            loss += simple_loss_scale * 100 * slm_loss + pruned_loss_scale * 100 * plm_loss
+
+        if nll_loss is not None and batch_idx_train < 3000:
+            loss = nll_loss
+        elif nll_loss is not None:
+            loss += nll_loss
     
     info = MetricsTracker()
     
-    if params.ctc_loss_scale > 0 and ctc_output is not None:
+    if params.ctc_loss_scale > 0 and ctc_output is not None and batch_idx_train >= 3000:
         # Compute ctc loss
 
         # NOTE: We need `encode_supervisions` to sort sequences with
@@ -889,9 +899,8 @@ def compute_loss(
     info["loss"] = loss.detach().cpu().item()
     info["simple_loss"] = simple_loss.detach().cpu().item()
     info["pruned_loss"] = pruned_loss.detach().cpu().item()
-    if slm_loss is not None:
-        info["slm_loss"] = slm_loss.detach().cpu().item()
-        info["plm_loss"] = plm_loss.detach().cpu().item()
+    if nll_loss is not None:
+        info["nll_loss"] = nll_loss.detach().cpu().item()
 
     return loss, info
 

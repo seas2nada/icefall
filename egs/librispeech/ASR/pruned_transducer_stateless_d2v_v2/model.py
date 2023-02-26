@@ -23,7 +23,7 @@ import torch
 import torch.nn as nn
 from encoder_interface import EncoderInterface
 
-from icefall.utils import add_sos
+from icefall.utils import add_sos, add_eos
 
 import contextlib
 import numpy as np
@@ -132,8 +132,8 @@ class Transducer(nn.Module):
 
         assert x.size(0) == x_lens.size(0) == y.dim0
 
-        gaussian = True
-        gaussian_prob = 0.1
+        gaussian = False
+        gaussian_prob = 0.0
         curr_prob = np.random.random()
         use_gaussian = gaussian and curr_prob < gaussian_prob
         
@@ -148,9 +148,6 @@ class Transducer(nn.Module):
           for b_idx, encoder_out_ in enumerate(encoder_out):
             # encoder_out[b_idx, :x_lens[b_idx]] = torch.randn((1, x_lens[b_idx], encoder_out.size(-1))).to(device) * variance**0.5
             encoder_out[b_idx, :x_lens[b_idx]] = torch.zeros((1, x_lens[b_idx], encoder_out.size(-1))).to(device)
-          
-          lm_scale = 1.0
-          am_scale = 0.0
 
         assert torch.all(x_lens > 0)
 
@@ -170,16 +167,20 @@ class Transducer(nn.Module):
 
         blank_id = self.decoder.blank_id
         sos_y = add_sos(y, sos_id=blank_id)
+        y_eos = add_eos(y, eos_id=blank_id)
 
         # sos_y_padded: [B, S + 1], start with SOS.
         sos_y_padded = sos_y.pad(mode="constant", padding_value=blank_id)
-
-        # decoder_out: [B, S + 1, decoder_dim]
-        decoder_out = self.decoder(sos_y_padded)
+        y_eos_padded = y_eos.pad(mode="constant", padding_value=blank_id)
 
         # Note: y does not start with SOS
         # y_padded : [B, S]
         y_padded = y.pad(mode="constant", padding_value=0)
+
+        # decoder_out: [B, S + 1, decoder_dim]
+        sos_y_lens = y_lens + 1
+        decoder_out, nll_loss = self.decoder(sos_y_padded, y_eos_padded, sos_y_lens, features_only=False)
+        nll_loss = nll_loss.sum()
 
         y_padded = y_padded.to(torch.int64)
         boundary = torch.zeros((x.size(0), 4), dtype=torch.int64, device=x.device)
@@ -187,11 +188,6 @@ class Transducer(nn.Module):
         boundary[:, 3] = x_lens
 
         lm = self.simple_lm_proj(decoder_out)
-        
-        if use_lm_loss:
-          slm_hyp = self.slm_output(lm)
-          slm_hyp = slm_hyp[:,:-1,:]
-          slm_loss = torch.nn.functional.cross_entropy(slm_hyp.reshape(-1, slm_hyp.size(-1)), y_padded.view(-1))
 
         with torch.no_grad() if use_gaussian else contextlib.nullcontext():
           am = self.simple_am_proj(encoder_out)
@@ -223,11 +219,6 @@ class Transducer(nn.Module):
           pam = self.joiner.encoder_proj(encoder_out)
         plm = self.joiner.decoder_proj(decoder_out)
         
-        if use_lm_loss:
-          plm_hyp = self.plm_output(plm)
-          plm_hyp = plm_hyp[:,:-1,:]
-          plm_loss = torch.nn.functional.cross_entropy(plm_hyp.reshape(-1, plm_hyp.size(-1)), y_padded.view(-1))
-
         am_pruned, lm_pruned = k2.do_rnnt_pruning(
             am=pam,
             lm=plm,
@@ -250,7 +241,7 @@ class Transducer(nn.Module):
                 reduction="sum",
             )
 
-        return (simple_loss, pruned_loss, ctc_output), (slm_loss, plm_loss)
+        return (simple_loss, pruned_loss, ctc_output), (nll_loss)
 
     def decode(
         self,
