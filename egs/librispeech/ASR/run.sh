@@ -44,8 +44,8 @@ if [ $stage -le 0 ] && [ $stop_stage -ge 0 ]; then
         --prune-range 10 \
         --context-size 2 \
         --ctc-loss-scale 0.2 \
-        --peak-dec-lr 0.004175 \
-        --peak-enc-lr 0.0003859
+        --peak-dec-lr 0.0035 \
+        --peak-enc-lr 0.00035
 fi
 
 if [ $stage -le 1 ] && [ $stop_stage -ge 1 ]; then

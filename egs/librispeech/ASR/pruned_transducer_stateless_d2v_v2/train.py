@@ -801,33 +801,47 @@ def compute_loss(
     token_ids = sp.encode(texts, out_type=int)
     y = k2.RaggedTensor(token_ids).to(device)
 
+    ctc_only = 3000 > batch_idx_train
     with torch.set_grad_enabled(is_training):
-        (simple_loss, pruned_loss, ctc_output), lm_loss = model(
-            x=feature,
-            x_lens=feature_lens,
-            y=y,
-            prune_range=params.prune_range,
-            am_scale=params.am_scale,
-            lm_scale=params.lm_scale,
-        )
+        if ctc_only:
+            ctc_output = model(
+                x=feature,
+                x_lens=feature_lens,
+                y=y,
+                prune_range=params.prune_range,
+                am_scale=params.am_scale,
+                lm_scale=params.lm_scale,
+                ctc_only=True,
+            )
+            lm_loss = None
+        else:
+            (simple_loss, pruned_loss, ctc_output), lm_loss = model(
+                x=feature,
+                x_lens=feature_lens,
+                y=y,
+                prune_range=params.prune_range,
+                am_scale=params.am_scale,
+                lm_scale=params.lm_scale,
+            )
 
-        s = params.simple_loss_scale
-        # take down the scale on the simple loss from 1.0 at the start
-        # to params.simple_loss scale by warm_step.
-        simple_loss_scale = (
-            s
-            if batch_idx_train >= warm_step
-            else 1.0 - (batch_idx_train / warm_step) * (1.0 - s)
-        )
-        pruned_loss_scale = (
-            1.0
-            if batch_idx_train >= warm_step
-            else 0.1 + 0.9 * (batch_idx_train / warm_step)
-        )
+            s = params.simple_loss_scale
+            # take down the scale on the simple loss from 1.0 at the start
+            # to params.simple_loss scale by warm_step.
+            simple_loss_scale = (
+                s
+                if batch_idx_train >= warm_step
+                else 1.0 - (batch_idx_train / warm_step) * (1.0 - s)
+            )
+            pruned_loss_scale = (
+                1.0
+                if batch_idx_train >= warm_step
+                else 0.1 + 0.9 * (batch_idx_train / warm_step)
+            )
 
-        loss = simple_loss_scale * simple_loss + pruned_loss_scale * pruned_loss
-        if lm_loss is not None:
-            loss += lm_loss * 100
+            loss = simple_loss_scale * simple_loss + pruned_loss_scale * pruned_loss
+            if lm_loss is not None:
+                lm_loss_scale = 1
+                loss += lm_loss * lm_loss_scale
     
     info = MetricsTracker()
     
@@ -861,7 +875,10 @@ def compute_loss(
             use_double_scores=params.use_double_scores,
         )
         assert ctc_loss.requires_grad == is_training
-        loss += params.ctc_loss_scale * ctc_loss
+        if ctc_only:
+            loss = ctc_loss
+        else:
+            loss += params.ctc_loss_scale * ctc_loss
     
         info["ctc_loss"] = ctc_loss.detach().cpu().item()
     
@@ -887,8 +904,9 @@ def compute_loss(
     # Note: We use reduction=sum while computing the loss.
     info["utterances"] = feature.size(0)
     info["loss"] = loss.detach().cpu().item()
-    info["simple_loss"] = simple_loss.detach().cpu().item()
-    info["pruned_loss"] = pruned_loss.detach().cpu().item()
+    if not ctc_only:
+        info["simple_loss"] = simple_loss.detach().cpu().item()
+        info["pruned_loss"] = pruned_loss.detach().cpu().item()
     if lm_loss is not None:
         info["lm_loss"] = lm_loss.detach().cpu().item()
 
@@ -995,6 +1013,7 @@ def train_one_epoch(
         batch_size = len(batch["supervisions"]["text"])
 
         try:
+            ctc_only = 3000 > params.batch_idx_train
             with torch.cuda.amp.autocast(enabled=params.use_fp16):
                 loss, loss_info = compute_loss(
                     params=params,
@@ -1018,9 +1037,10 @@ def train_one_epoch(
             if params.multi_optim and batch_idx % params.accum_grads == 0:
                 set_batch_count(model, params.batch_idx_train)
                 scheduler_enc.step_batch(params.batch_idx_train)
-                scheduler_dec.step_batch(params.batch_idx_train)
                 scaler.step(optimizer_enc)
-                scaler.step(optimizer_dec)
+                if not ctc_only:
+                    scheduler_dec.step_batch(params.batch_idx_train)
+                    scaler.step(optimizer_dec)
                 scaler.update()
                 optimizer_enc.zero_grad()
                 optimizer_dec.zero_grad()
@@ -1089,10 +1109,10 @@ def train_one_epoch(
                     f"grad_scale is too small, exiting: {cur_grad_scale}"
                 )
 
-        if params.batch_idx_train > 4000 and loss > 300:
-            raise RunteimError(
-                    f"divergence... exiting: loss={loss}"
-                )
+        # if params.batch_idx_train > 4000 and loss > 300:
+        #     raise RunteimError(
+        #             f"divergence... exiting: loss={loss}"
+        #         )
 
         if batch_idx % (params.log_interval*params.accum_grads) == 0:
             if params.multi_optim:
