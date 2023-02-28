@@ -1077,6 +1077,60 @@ def modified_combined_beam_search(
     assert encoder_out.ndim == 3, encoder_out.shape
     assert encoder_out.size(0) >= 1, encoder_out.size(0)
 
+    encoder_out = model.joiner.encoder_proj(encoder_out)
+    ctc_output = model.ctc_output(encoder_out)
+    ctc_output = ctc_output.argmax(-1)
+
+    hyp = []
+    max_len = 0
+    for encoder_out_ in ctc_output:
+      encoder_out_ = encoder_out_.unique_consecutive()
+      encoder_out_tmp = encoder_out_[torch.where(encoder_out_ != 0)]
+
+      # Prevent empty hypo
+      if not len(encoder_out_tmp) < 1:
+        encoder_out_ = encoder_out_tmp
+      hyp.append(encoder_out_.detach().cpu().tolist())
+      
+      if max_len < len(encoder_out_):
+        max_len = len(encoder_out_)
+
+    device = encoder_out.device
+    hyp = k2.RaggedTensor(hyp).to(device)
+    hyp_padded = hyp.pad(mode="constant", padding_value=0)
+
+    row_splits = hyp.shape.row_splits(1)
+    hyp_lens = row_splits[1:] - row_splits[:-1]
+    hyp_padding_mask = encoder_out.new_ones((encoder_out.size(0), max_len))
+    for i, length in enumerate(hyp_lens):
+      hyp_padding_mask[i, :length] = 0
+    hyp_padding_mask = hyp_padding_mask.bool()
+
+    ### Do spell correcting ###
+    # IL_out: [B, S + 1, encoder_dim]
+    IL_out, _ = model.internal_LM.forward_inference(
+        hyp_padded,
+        projector=model.IL_proj,
+        device=device,
+        src_mask=hyp_padding_mask, 
+        return_normalized=False
+    )
+    
+    # combine two modalities
+    x_padding_mask = encoder_out.new_ones((encoder_out.size(0), encoder_out.size(1)))
+    for i, length in enumerate(encoder_out_lens):
+      x_padding_mask[i, :length] = 0
+    x_padding_mask = x_padding_mask.bool()
+
+    encoder_out = model.modality_combiner(
+      IL_out, 
+      encoder_out, 
+      src_mask=None,
+      tgt_mask=x_padding_mask,
+      device=device,
+      return_normalized=False,
+    )
+
     packed_encoder_out = torch.nn.utils.rnn.pack_padded_sequence(
         input=encoder_out,
         lengths=encoder_out_lens.cpu(),
@@ -1104,14 +1158,12 @@ def modified_combined_beam_search(
             )
         )
 
-    encoder_out = model.joiner.encoder_proj(packed_encoder_out.data)
-
     offset = 0
     finalized_B = []
     for (t, batch_size) in enumerate(batch_size_list):
         start = offset
         end = offset + batch_size
-        current_encoder_out = encoder_out.data[start:end].unsqueeze(1)
+        current_encoder_out = packed_encoder_out.data[start:end].unsqueeze(1)
         # current_encoder_out's shape is (batch_size, 1, encoder_out_dim)
         offset = end
 
@@ -1135,20 +1187,6 @@ def modified_combined_beam_search(
 
         decoder_out = model.decoder(decoder_input, need_pad=False)
 
-        # IL_out: [num_hyps, context_size, encoder_dim]
-        for i, internal_LM in enumerate(model.internal_LM):
-          if i == 0:
-            IL_out, _ = internal_LM(
-              decoder_out.transpose(0,1), 
-              decoder_out.transpose(0,1), 
-              decoder_out.transpose(0,1))
-          else:
-            IL_out, _ = internal_LM(IL_out, IL_out, IL_out)
-        
-        # context_size, num_hyps, C -> num_hyps, context_size, C
-        IL_out = IL_out.transpose(0,1)
-        IL_out = model.internal_LM_proj(IL_out)
-        # combine two modalities
         # Note: For torch 1.7.1 and below, it requires a torch.int64 tensor
         # as index, so we use `to(torch.int64)` below.
         current_encoder_out = torch.index_select(
@@ -1156,14 +1194,9 @@ def modified_combined_beam_search(
             dim=0,
             index=hyps_shape.row_ids(1).to(torch.int64),
         )  # (num_hyps, 1, encoder_out_dim)
-        current_encoder_out, _ = model.modality_combiner(
-          query=current_encoder_out.transpose(0,1),
-          key=IL_out.transpose(0,1),
-          value=IL_out.transpose(0,1),
-        )
-        current_encoder_out = current_encoder_out.transpose(0, 1)
-        current_encoder_out = model.encoder_out_proj(current_encoder_out)
+
         current_encoder_out = current_encoder_out.unsqueeze(1)
+        current_encoder_out = model.joiner.encoder_proj(current_encoder_out)
         # current_encoder_out's shape is (num_hyps, 1, 1, encoder_out_dim)
 
         decoder_out = decoder_out.unsqueeze(1)

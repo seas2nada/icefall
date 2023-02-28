@@ -801,7 +801,7 @@ def compute_loss(
     token_ids = sp.encode(texts, out_type=int)
     y = k2.RaggedTensor(token_ids).to(device)
 
-    ctc_only = 3000 > batch_idx_train
+    ctc_only = 5000 > batch_idx_train
     with torch.set_grad_enabled(is_training):
         if ctc_only:
             ctc_output = model(
@@ -1013,7 +1013,7 @@ def train_one_epoch(
         batch_size = len(batch["supervisions"]["text"])
 
         try:
-            ctc_only = 3000 > params.batch_idx_train
+            ctc_only = 5000 > params.batch_idx_train
             with torch.cuda.amp.autocast(enabled=params.use_fp16):
                 loss, loss_info = compute_loss(
                     params=params,
