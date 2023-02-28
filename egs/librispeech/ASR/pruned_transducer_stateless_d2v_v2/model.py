@@ -74,8 +74,8 @@ class Transducer(nn.Module):
         self.internal_LM_encoder = TransformerEncoder(
             input_size=vocab_size, 
             output_size=encoder_dim, 
-            linear_units=2048, 
-            num_blocks=2,
+            linear_units=1024,
+            num_blocks=4,
             attention_heads=4,
             dropout_rate=0.1,
             padding_idx=0,
@@ -122,6 +122,7 @@ class Transducer(nn.Module):
         am_scale: float = 0.0,
         lm_scale: float = 0.0,
         ctc_only = False,
+        lm_only = False,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Args:
@@ -199,7 +200,7 @@ class Transducer(nn.Module):
         y_padding_mask = y_padding_mask.bool()
 
         # Make y_inp from ctc_output
-        ctc_output_ = ctc_output.argmax(-1)
+        ctc_output_ = ctc_output.detach().argmax(-1)
         hyp = []
         max_len = 0
         for encoder_out_ in ctc_output_:
@@ -248,7 +249,7 @@ class Transducer(nn.Module):
 
         hyp_padded = hyp.pad(mode="constant", padding_value=0)
         sos_hyp = add_sos(hyp, sos_id=blank_id)
-        sos_hyp_padded = sos_hyp.pad(mode="constant", padding_value=blank_id)
+        sos_hyp_padded = sos_hyp.pad(mode="constant", padding_value=1)
 
         ### Do spell correcting ###
         # IL_out: [B, S + 1, vocab_size]
@@ -281,6 +282,9 @@ class Transducer(nn.Module):
         hyp = IL_out
         hyp_loss = self.sc_criterion(hyp.reshape(-1, hyp.size(-1)), tar_y_padded.view(-1).long().to(device)).sum()
         lm_loss = hyp_loss
+
+        if lm_only:
+          return lm_loss
 
         am = self.simple_am_proj(encoder_out)
 

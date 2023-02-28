@@ -802,6 +802,7 @@ def compute_loss(
     y = k2.RaggedTensor(token_ids).to(device)
 
     ctc_only = 5000 > batch_idx_train
+    lm_only = 10000 > batch_idx_train >= 5000
     with torch.set_grad_enabled(is_training):
         if ctc_only:
             ctc_output = model(
@@ -814,6 +815,18 @@ def compute_loss(
                 ctc_only=True,
             )
             lm_loss = None
+        elif lm_only:
+            lm_loss = model(
+                x=feature,
+                x_lens=feature_lens,
+                y=y,
+                prune_range=params.prune_range,
+                am_scale=params.am_scale,
+                lm_scale=params.lm_scale,
+                lm_only=True,
+            )
+            loss = lm_loss
+            ctc_output = None
         else:
             (simple_loss, pruned_loss, ctc_output), lm_loss = model(
                 x=feature,
@@ -845,7 +858,7 @@ def compute_loss(
     
     info = MetricsTracker()
     
-    if params.ctc_loss_scale > 0:
+    if params.ctc_loss_scale > 0 and ctc_output is not None:
         # Compute ctc loss
 
         # NOTE: We need `encode_supervisions` to sort sequences with
@@ -904,7 +917,7 @@ def compute_loss(
     # Note: We use reduction=sum while computing the loss.
     info["utterances"] = feature.size(0)
     info["loss"] = loss.detach().cpu().item()
-    if not ctc_only:
+    if not ctc_only and not lm_only:
         info["simple_loss"] = simple_loss.detach().cpu().item()
         info["pruned_loss"] = pruned_loss.detach().cpu().item()
     if lm_loss is not None:
@@ -1014,6 +1027,7 @@ def train_one_epoch(
 
         try:
             ctc_only = 5000 > params.batch_idx_train
+            lm_only = 10000 > batch_idx_train >= 5000
             with torch.cuda.amp.autocast(enabled=params.use_fp16):
                 loss, loss_info = compute_loss(
                     params=params,
@@ -1036,8 +1050,9 @@ def train_one_epoch(
 
             if params.multi_optim and batch_idx % params.accum_grads == 0:
                 set_batch_count(model, params.batch_idx_train)
-                scheduler_enc.step_batch(params.batch_idx_train)
-                scaler.step(optimizer_enc)
+                if not lm_only:
+                    scheduler_enc.step_batch(params.batch_idx_train)
+                    scaler.step(optimizer_enc)
                 if not ctc_only:
                     scheduler_dec.step_batch(params.batch_idx_train)
                     scaler.step(optimizer_dec)
