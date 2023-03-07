@@ -58,6 +58,7 @@ import warnings
 from pathlib import Path
 from shutil import copyfile
 from typing import Any, Dict, Optional, Tuple, Union
+import os
 
 import k2
 import optim
@@ -98,9 +99,12 @@ from icefall.utils import (
     setup_logger,
     str2bool,
     save_args,
+    store_transcripts,
+    write_error_stats,
 )
 
 import wandb
+from collections import defaultdict
 
 #from icefall.checkpoint import save_checkpoint as save_checkpoint_impl
 LRSchedulerType = Union[torch.optim.lr_scheduler._LRScheduler, optim.LRScheduler]
@@ -221,7 +225,49 @@ def add_rep_arguments(parser: argparse.ArgumentParser):
     )
 
     parser.add_argument(
-        "--layer-average",
+        "--layer-average-start-idx",
+        type=int,
+        default=-1,
+    )
+
+    parser.add_argument(
+        "--train-individual",
+        type=str,
+        default=None,
+    )
+    
+    parser.add_argument(
+        "--individual-bookid",
+        type=str,
+        default=None,
+    )
+
+    parser.add_argument(
+        "--freeze-lower-encoder-layers",
+        type=int,
+        default=0,
+    )
+
+    parser.add_argument(
+        "--freeze-decoder-embedding-layers",
+        type=str2bool,
+        default=False,
+    )
+
+    parser.add_argument(
+        "--freeze-encoder",
+        type=str2bool,
+        default=False,
+    )
+
+    parser.add_argument(
+        "--freeze-decoder",
+        type=str2bool,
+        default=False,
+    )
+
+    parser.add_argument(
+        "--freeze-joiner",
         type=str2bool,
         default=False,
     )
@@ -561,8 +607,10 @@ def get_params() -> AttributeDict:
         {
             "best_train_loss": float("inf"),
             "best_valid_loss": float("inf"),
+            "best_valid_wer": float("inf"),
             "best_train_epoch": -1,
             "best_valid_epoch": -1,
+            "best_wer_epoch": -1,
             "batch_idx_train": 0,
             "log_interval": 50,
             "reset_interval": 200,
@@ -594,7 +642,7 @@ def get_encoder_model(params: AttributeDict) -> nn.Module:
                     output_size=params.encoder_dim,
                     freeze_finetune_updates=params.freeze_finetune_updates,
                     additional_block=params.additional_block,
-                    layer_average=params.layer_average,
+                    layer_average_start_idx=params.layer_average_start_idx,
                 ) 
     else:
         encoder = Zipformer(
@@ -703,6 +751,39 @@ def get_transducer_model(params: AttributeDict) -> nn.Module:
 
         del prefinetuned_model
 
+    if params.freeze_lower_encoder_layers != 0:
+        freeze_param = [f"encoder.encoders.encoder.layers.{i}" for i in range(params.freeze_lower_encoder_layers)]
+        for t in freeze_param:
+            for k, p in model.named_parameters():
+                if t in k:
+                    logging.info(f"Setting {k}.requires_grad = False")
+                    p.requires_grad = False
+
+    if params.freeze_decoder_embedding_layers:
+        freeze_param = "decoder.embedding"
+        for k, p in model.named_parameters():
+            if freeze_param in k:
+                logging.info(f"Setting {k}.requires_grad = False")
+                p.requires_grad = False
+
+    if params.freeze_encoder:
+        for k, p in model.named_parameters():
+            if "encoder" in k and "joiner" not in k:
+                logging.info(f"Setting {k}.requires_grad = False")
+                p.requires_grad = False
+    
+    if params.freeze_decoder:
+        for k, p in model.named_parameters():
+            if "decoder" in k and "joiner" not in k:
+                logging.info(f"Setting {k}.requires_grad = False")
+                p.requires_grad = False
+
+    if params.freeze_joiner:
+        for k, p in model.named_parameters():
+            if "joiner" in k:
+                logging.info(f"Setting {k}.requires_grad = False")
+                p.requires_grad = False
+
     return model
 
 
@@ -761,6 +842,8 @@ def load_checkpoint_if_available(
         "batch_idx_train",
         "best_train_loss",
         "best_valid_loss",
+        "best_wer_epoch",
+        "best_valid_wer",
     ]
     for k in keys:
         params[k] = saved_params[k]
@@ -823,6 +906,10 @@ def save_checkpoint(
     if params.best_valid_epoch == params.cur_epoch:
         best_valid_filename = params.exp_dir / "best-valid-loss.pt"
         copyfile(src=filename, dst=best_valid_filename)
+
+    if params.best_wer_epoch == params.cur_epoch:
+        best_wer_filename = params.exp_dir / "best-valid-wer.pt"
+        copyfile(src=filename, dst=best_wer_filename)
 
 
 def compute_loss(
@@ -1016,6 +1103,47 @@ def compute_validation_loss(
         )
         assert loss.requires_grad is False
         tot_loss = tot_loss + loss_info
+    
+    results_dict = decode_dataset(
+                dl=valid_dl,
+                params=params,
+                model=model,
+                sp=sp,
+                word_table=None,
+                decoding_graph=None,
+            )
+
+    test_set_wers = dict()
+    test_set_name = "valid"
+    res_dir = "validation_state"
+    if not os.path.exists(res_dir):
+        os.makedirs(res_dir)
+
+    for key, results in results_dict.items():
+        recog_path = (
+            res_dir + "/" + f"recogs-{test_set_name}-{key}.txt"
+        )
+        results = sorted(results)
+        store_transcripts(filename=recog_path, texts=results)
+        logging.info(f"The transcripts are stored in {recog_path}")
+
+        # The following prints out WERs, per-word error statistics and aligned
+        # ref/hyp pairs.
+        errs_filename = (
+            res_dir + "/" + f"errs-{test_set_name}-{key}.txt"
+        )
+        with open(errs_filename, "w") as f:
+            wer = write_error_stats(
+                f, f"{test_set_name}-{key}", results, enable_log=True
+            )
+            test_set_wers[key] = wer
+
+        logging.info("Wrote detailed error stats to {}".format(errs_filename))
+
+    test_set_wers = sorted(test_set_wers.items(), key=lambda x: x[1])
+    
+    for key, val in test_set_wers:
+        wer = val
 
     if world_size > 1:
         tot_loss.reduce(loss.device)
@@ -1024,6 +1152,9 @@ def compute_validation_loss(
     if loss_value < params.best_valid_loss:
         params.best_valid_epoch = params.cur_epoch
         params.best_valid_loss = loss_value
+    if wer < params.best_valid_wer:
+        params.best_wer_epoch = params.cur_epoch
+        params.best_valid_wer = wer
 
     return tot_loss
 
@@ -1279,6 +1410,10 @@ def train_one_epoch(
         wb.log({"valid/pruned_loss": valid_info["pruned_loss"]*numel})
         wb.log({"valid/ctc_loss": valid_info["ctc_loss"]*numel})
 
+    # FIXME: why tot_loss["utterances"] is sometimes 0?
+    if tot_loss["utterances"] == 0:
+        tot_loss["utterances"] = 1
+
     loss_value = tot_loss["loss"] / tot_loss["utterances"]
     params.train_loss = loss_value
     if params.train_loss < params.best_train_loss:
@@ -1444,7 +1579,14 @@ def run(rank, world_size, args, wb=None):
 
     userlibri = UserLibriAsrDataModule(args)
 
-    train_cuts = userlibri.train_cuts(pseudo=args.use_pseudo_labels, pseudo_name=args.pseudo_name)
+    pseudo_name = args.pseudo_name if args.use_pseudo_labels else None
+    if params.train_individual is not None:
+        assert params.individual_bookid is not None
+        train_cuts = userlibri.individual_cuts(params.individual_bookid, pseudo=args.use_pseudo_labels, pseudo_name=pseudo_name)
+        valid_cuts = userlibri.dev_cuts(params.train_individual)
+    else:
+        train_cuts = userlibri.train_cuts(pseudo=args.use_pseudo_labels, pseudo_name=pseudo_name)
+        valid_cuts = userlibri.dev_cuts()
 
     def remove_short_and_long_utt(c: Cut):
         # Keep only utterances with duration between 1 second and 20 seconds
@@ -1469,8 +1611,6 @@ def run(rank, world_size, args, wb=None):
     train_dl = userlibri.train_dataloaders(
         train_cuts, sampler_state_dict=sampler_state_dict
     )
-
-    valid_cuts = userlibri.dev_cuts()
     valid_dl = userlibri.valid_dataloaders(valid_cuts)
     
     '''
@@ -1521,8 +1661,8 @@ def run(rank, world_size, args, wb=None):
 
         if params.update_ema:
             with torch.no_grad():
-                ema_decay = 0.999
-                ema_end_decay = 0.99999
+                ema_decay = 0.499
+                ema_end_decay = 0.49999
                 start_weight = 1 - (params.cur_epoch / params.num_epochs)
                 end_weight = 1 - start_weight
                 alpha = start_weight * ema_decay + end_weight * ema_end_decay
@@ -1627,6 +1767,101 @@ def scan_pessimistic_batches_for_oom(
             f"Maximum memory allocated so far is {torch.cuda.max_memory_allocated()//1000000}MB"
         )
 
+def decode_dataset(
+    dl: torch.utils.data.DataLoader,
+    params: AttributeDict,
+    model: nn.Module,
+    sp: spm.SentencePieceProcessor,
+    word_table: Optional[k2.SymbolTable] = None,
+    decoding_graph: Optional[k2.Fsa] = None,
+    decoding_method = "modified_beam_search",
+):
+    """Decode dataset.
+
+    Args:
+      dl:
+        PyTorch's dataloader containing the dataset to decode.
+      params:
+        It is returned by :func:`get_params`.
+      model:
+        The neural model.
+      sp:
+        The BPE model.
+      word_table:
+        The word symbol table.
+      decoding_graph:
+        The decoding graph. Can be either a `k2.trivial_graph` or HLG, Used
+        only when --decoding_method is fast_beam_search, fast_beam_search_nbest,
+        fast_beam_search_nbest_oracle, and fast_beam_search_nbest_LG.
+    Returns:
+      Return a dict, whose key may be "greedy_search" if greedy search
+      is used, or it may be "beam_7" if beam size of 7 is used.
+      Its value is a list of tuples. Each tuple contains two elements:
+      The first is the reference transcript, and the second is the
+      predicted result.
+    """
+    num_cuts = 0
+
+    try:
+        num_batches = len(dl)
+    except TypeError:
+        num_batches = "?"
+
+    log_interval = 20
+
+    from beam_search import modified_beam_search
+
+    results = defaultdict(list)
+    for batch_idx, batch in enumerate(dl):
+        texts = batch["supervisions"]["text"]
+        cut_ids = [cut.id for cut in batch["supervisions"]["cut"]]
+
+        device = next(model.module.parameters()).device
+        feature = batch["inputs"]
+        assert feature.ndim == 2 or feature.ndim == 3
+
+        feature = feature.to(device)
+        # at entry, feature is (N, T, C)
+
+        supervisions = batch["supervisions"]
+        if feature.ndim == 2:
+            feature_lens = [] 
+            for supervision in supervisions['cut']:
+                try: feature_lens.append(supervision.tracks[0].cut.recording.num_samples)
+                except: feature_lens.append(supervision.recording.num_samples)
+            feature_lens = torch.tensor(feature_lens)
+
+        elif feature.ndim == 3:
+            feature_lens = supervisions["num_frames"].to(device)
+
+        hyps = []
+        encoder_out, encoder_out_lens = model.module.encoder(x=feature, x_lens=feature_lens)
+        hyp_tokens = modified_beam_search(
+            model=model.module,
+            encoder_out=encoder_out,
+            encoder_out_lens=encoder_out_lens,
+            beam=4,
+        )
+        for hyp in sp.decode(hyp_tokens):
+            hyps.append(hyp.split())
+        hyps_dict = {f"beam_size_4": hyps}
+
+        for name, hyps in hyps_dict.items():
+            this_batch = []
+            assert len(hyps) == len(texts)
+            for cut_id, hyp_words, ref_text in zip(cut_ids, hyps, texts):
+                ref_words = ref_text.split()
+                this_batch.append((cut_id, ref_words, hyp_words))
+
+            results[name].extend(this_batch)
+
+        num_cuts += len(texts)
+
+        if batch_idx % log_interval == 0:
+            batch_str = f"{batch_idx}/{num_batches}"
+
+            logging.info(f"batch {batch_str}, cuts processed until now is {num_cuts}")
+    return results
 
 def main():
     parser = get_parser()
