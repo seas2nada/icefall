@@ -19,7 +19,7 @@ log() {
   echo -e "$(date '+%Y-%m-%d %H:%M:%S') (${fname}:${BASH_LINENO[0]}:${FUNCNAME[1]}) $*"
 }
 
-expdir=pruned_transducer_stateless_d2v_v2/d2v-T_spellcorrector
+expdir=pruned_transducer_stateless_d2v_v2/d2v-T_spellcorrector-bias-add
 if [ $stage -le 0 ] && [ $stop_stage -ge 0 ]; then
   log "Stage 0: Train model"
   ./pruned_transducer_stateless_d2v_v2/train.py \
@@ -44,7 +44,7 @@ if [ $stage -le 0 ] && [ $stop_stage -ge 0 ]; then
         --prune-range 10 \
         --context-size 2 \
         --ctc-loss-scale 0.2 \
-        --peak-dec-lr 0.04175 \
+        --peak-dec-lr 0.0003 \
         --peak-enc-lr 0.0003859
 fi
 

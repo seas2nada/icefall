@@ -18,6 +18,7 @@
 from typing import Tuple, Optional, Dict
 import logging
 import math
+import numpy as np
 
 import k2
 import torch
@@ -30,6 +31,8 @@ from encoder_interface import EncoderInterface
 
 from icefall.utils import add_sos, add_eos
 from transformer_scmodule import TransformerEncoder, TransformerDecoder
+
+import contextlib
 
 class Transducer(nn.Module):
     """It implements https://arxiv.org/pdf/1211.3711.pdf
@@ -75,7 +78,7 @@ class Transducer(nn.Module):
             input_size=vocab_size, 
             output_size=encoder_dim, 
             linear_units=1024,
-            num_blocks=4,
+            num_blocks=2,
             attention_heads=4,
             dropout_rate=0.1,
             padding_idx=0,
@@ -91,8 +94,8 @@ class Transducer(nn.Module):
 
         self.modality_combiner = TransformerDecoder(
             vocab_size=encoder_dim, 
-            encoder_output_size=vocab_size,
-            num_blocks=2,
+            encoder_output_size=encoder_dim,
+            num_blocks=1,
             attention_heads=4,
             dropout_rate=0.1,
             input_layer="linear",
@@ -163,111 +166,134 @@ class Transducer(nn.Module):
 
         use_lm_loss = True
 
-        # compute ctc log-probs
-        ctc_output = self.ctc_output(encoder_out)
+        with torch.no_grad() if lm_only else contextlib.nullcontext():
+          # compute ctc log-probs
+          ctc_output = self.ctc_output(encoder_out)
 
-        if ctc_only:
-          return ctc_output
+          if ctc_only:
+            return ctc_output
 
-        # Now for the decoder, i.e., the prediction network
-        row_splits = y.shape.row_splits(1)
-        y_lens = row_splits[1:] - row_splits[:-1]
+          # Now for the decoder, i.e., the prediction network
+          row_splits = y.shape.row_splits(1)
+          y_lens = row_splits[1:] - row_splits[:-1]
 
-        blank_id = self.decoder.blank_id
-        sos_y = add_sos(y, sos_id=blank_id)
+          blank_id = self.decoder.blank_id
+          sos_y = add_sos(y, sos_id=blank_id)
 
-        # sos_y_padded: [B, S + 1], start with SOS.
-        sos_y_padded = sos_y.pad(mode="constant", padding_value=blank_id)
+          # sos_y_padded: [B, S + 1], start with SOS.
+          sos_y_padded = sos_y.pad(mode="constant", padding_value=blank_id)
 
-        # decoder_out: [B, S + 1, decoder_dim]
-        decoder_out = self.decoder(sos_y_padded)
+          # decoder_out: [B, S + 1, decoder_dim]
+          decoder_out = self.decoder(sos_y_padded)
 
-        # Note: y does not start with SOS
-        # y_padded : [B, S]
-        y_padded = y.pad(mode="constant", padding_value=0)
+          # Note: y does not start with SOS
+          # y_padded : [B, S]
+          y_padded = y.pad(mode="constant", padding_value=0)
 
-        y_padded = y_padded.to(torch.int64)
-        boundary = torch.zeros((x.size(0), 4), dtype=torch.int64, device=x.device)
-        boundary[:, 2] = y_lens
-        boundary[:, 3] = x_lens
+          y_padded = y_padded.to(torch.int64)
+          boundary = torch.zeros((x.size(0), 4), dtype=torch.int64, device=x.device)
+          boundary[:, 2] = y_lens
+          boundary[:, 3] = x_lens
 
-        lm = self.simple_lm_proj(decoder_out)
+          lm = self.simple_lm_proj(decoder_out)
 
-        # Make y padding mask [B, S]
-        y_padding_mask = decoder_out.new_ones((decoder_out.size(0), decoder_out.size(1)-1))
-        for i, length in enumerate(y_lens):
-          y_padding_mask[i, :length] = 0
-        y_padding_mask = y_padding_mask.bool()
+          # Make y padding mask [B, S]
+          y_padding_mask = decoder_out.new_ones((decoder_out.size(0), decoder_out.size(1)-1))
+          for i, length in enumerate(y_lens):
+            y_padding_mask[i, :length] = 0
+          y_padding_mask = y_padding_mask.bool()
 
-        # Make y_inp from ctc_output
-        ctc_output_ = ctc_output.detach().argmax(-1)
-        hyp = []
-        max_len = 0
-        for encoder_out_ in ctc_output_:
-          encoder_out_ = encoder_out_.unique_consecutive()
-          encoder_out_tmp = encoder_out_[torch.where(encoder_out_ != 0)]
+          # Make y_inp from ctc_output
+          ctc_output_ = ctc_output.argmax(-1)
+          hyp = []
+          max_len = 0
+          for encoder_out_ in ctc_output_:
+            encoder_out_ = encoder_out_.unique_consecutive()
+            encoder_out_tmp = encoder_out_[torch.where(encoder_out_ != 0)]
 
-          # Prevent empty hypo
-          if not len(encoder_out_tmp) < 1:
-            encoder_out_ = encoder_out_tmp
-          hyp.append(encoder_out_.detach().cpu().tolist())
+            # Prevent empty hypo
+            if not len(encoder_out_tmp) < 1:
+              encoder_out_ = encoder_out_tmp
+            hyp.append(encoder_out_.detach().cpu().tolist())
+            
+            if max_len < len(encoder_out_):
+              max_len = len(encoder_out_)
+          hyp = k2.RaggedTensor(hyp).to(x.device)
+          device = x.device
+
+          # Make padding masks [B, S]
+          row_splits = hyp.shape.row_splits(1)
+          hyp_lens = row_splits[1:] - row_splits[:-1]
+          hyp_padding_mask = decoder_out.new_ones((decoder_out.size(0), max_len))
+          for i, length in enumerate(hyp_lens):
+            hyp_padding_mask[i, :length] = 0
+          hyp_padding_mask = hyp_padding_mask.bool()
+
+          sos_hyp_padding_mask = decoder_out.new_ones((decoder_out.size(0), max_len + 1))
+          sos_hyp_lens = hyp_lens + 1
+          for i, length in enumerate(sos_hyp_lens):
+            sos_hyp_padding_mask[i, :length] = 0
+          sos_hyp_padding_mask = sos_hyp_padding_mask.bool()
+
+          x_padding_mask = decoder_out.new_ones((encoder_out.size(0), encoder_out.size(1)))
+          for i, length in enumerate(x_lens):
+            x_padding_mask[i, :length] = 0
+          x_padding_mask = x_padding_mask.bool()
           
-          if max_len < len(encoder_out_):
-            max_len = len(encoder_out_)
-        hyp = k2.RaggedTensor(hyp).to(x.device)
-        device = x.device
+          y_padding_mask = decoder_out.new_ones((len(y_lens), max(y_lens)))
+          for i, length in enumerate(y_lens):
+            y_padding_mask[i, :length] = 0
+          y_padding_mask = y_padding_mask.bool()
 
-        # Make padding masks [B, S]
-        row_splits = hyp.shape.row_splits(1)
-        hyp_lens = row_splits[1:] - row_splits[:-1]
-        hyp_padding_mask = decoder_out.new_ones((decoder_out.size(0), max_len))
-        for i, length in enumerate(hyp_lens):
-          hyp_padding_mask[i, :length] = 0
-        hyp_padding_mask = hyp_padding_mask.bool()
+          sos_y_padding_mask = decoder_out.new_ones((len(y_lens), max(y_lens) + 1))
+          sos_y_lens = y_lens + 1
+          for i, length in enumerate(sos_y_lens):
+            sos_y_padding_mask[i, :length] = 0
+          sos_y_padding_mask = sos_y_padding_mask.bool()
 
-        sos_hyp_padding_mask = decoder_out.new_ones((decoder_out.size(0), max_len + 1))
-        sos_hyp_lens = hyp_lens + 1
-        for i, length in enumerate(sos_hyp_lens):
-          sos_hyp_padding_mask[i, :length] = 0
-        sos_hyp_padding_mask = sos_hyp_padding_mask.bool()
-
-        x_padding_mask = decoder_out.new_ones((encoder_out.size(0), encoder_out.size(1)))
-        for i, length in enumerate(x_lens):
-          x_padding_mask[i, :length] = 0
-        x_padding_mask = x_padding_mask.bool()
-        
-        y_padding_mask = decoder_out.new_ones((len(y_lens), max(y_lens)))
-        for i, length in enumerate(y_lens):
-          y_padding_mask[i, :length] = 0
-        y_padding_mask = y_padding_mask.bool()
-
-        sos_y_padding_mask = decoder_out.new_ones((len(y_lens), max(y_lens) + 1))
-        sos_y_lens = y_lens + 1
-        for i, length in enumerate(sos_y_lens):
-          sos_y_padding_mask[i, :length] = 0
-        sos_y_padding_mask = sos_y_padding_mask.bool()
-
-        hyp_padded = hyp.pad(mode="constant", padding_value=0)
-        sos_hyp = add_sos(hyp, sos_id=blank_id)
-        sos_hyp_padded = sos_hyp.pad(mode="constant", padding_value=1)
+          hyp_padded = hyp.pad(mode="constant", padding_value=0)
+          sos_hyp = add_sos(hyp, sos_id=blank_id)
+          sos_hyp_padded = sos_hyp.pad(mode="constant", padding_value=1)
 
         ### Do spell correcting ###
         # IL_out: [B, S + 1, vocab_size]
+        teacher_forcing = 0.0
+        if np.random.rand() > teacher_forcing:
+          hyp_padded = sos_y_padded
+          hyp_lens = sos_y_lens
+
         hs_padded, hs_lens = self.internal_LM_encoder(
             hyp_padded,
             hyp_lens,
         )
-        IL_out, IL_lens = self.internal_LM_decoder(
+        # IL_out, IL_lens = self.internal_LM_decoder(
+        #     hs_padded,
+        #     hs_lens,
+        #     sos_y_padded,
+        #     sos_y_lens,
+        # )
+
+        # tar_y = add_eos(y, eos_id=1)
+        # tar_y_padded = tar_y.pad(mode="constant", padding_value=-1)
+        
+        # hyp = IL_out
+        # hyp_loss = self.sc_criterion(hyp.reshape(-1, hyp.size(-1)), tar_y_padded.view(-1).long().to(device)).sum()
+        # lm_loss = hyp_loss
+
+        # if lm_only:
+        #   return lm_loss
+
+        # # combine two modalities
+        # encoder_out_bias, encoder_out_lens = self.modality_combiner(
+        #     IL_out,
+        #     sos_y_lens,
+        #     encoder_out,
+        #     x_lens,
+        # )
+        lm_loss = None
+        encoder_out_bias, encoder_out_lens = self.modality_combiner(
             hs_padded,
             hs_lens,
-            sos_y_padded,
-            sos_y_lens,
-        )
-
-        # combine two modalities
-        encoder_out_bias, encoder_out_lens = self.modality_combiner(
-            IL_out,
-            sos_y_lens,
             encoder_out,
             x_lens,
         )
@@ -275,16 +301,6 @@ class Transducer(nn.Module):
         encoder_out_bias = self.bias_dropout(encoder_out_bias)
         encoder_out = encoder_out + encoder_out_bias
         encoder_out = self.enc_layernorm(encoder_out)
-
-        tar_y = add_eos(y, eos_id=1)
-        tar_y_padded = tar_y.pad(mode="constant", padding_value=-1)
-        
-        hyp = IL_out
-        hyp_loss = self.sc_criterion(hyp.reshape(-1, hyp.size(-1)), tar_y_padded.view(-1).long().to(device)).sum()
-        lm_loss = hyp_loss
-
-        if lm_only:
-          return lm_loss
 
         am = self.simple_am_proj(encoder_out)
 
