@@ -219,9 +219,9 @@ def add_rep_arguments(parser: argparse.ArgumentParser):
     )
     
     parser.add_argument(
-        "--update-ema",
-        type=str2bool,
-        default=False,
+        "--ema-alpha",
+        type=float,
+        default=1,
     )
 
     parser.add_argument(
@@ -1659,10 +1659,11 @@ def run(rank, world_size, args, wb=None):
             wb=wb,
         )
 
-        if params.update_ema:
+        if params.ema_alpha != 1:
             with torch.no_grad():
-                ema_decay = 0.499
-                ema_end_decay = 0.49999
+                ema_decay = params.ema_alpha
+                ema_end_decay = ema_decay + 0.00099
+
                 start_weight = 1 - (params.cur_epoch / params.num_epochs)
                 end_weight = 1 - start_weight
                 alpha = start_weight * ema_decay + end_weight * ema_end_decay
