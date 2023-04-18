@@ -66,7 +66,7 @@ import sentencepiece as spm
 import torch
 import torch.multiprocessing as mp
 import torch.nn as nn
-from asr_datamodule import UserLibriAsrDataModule, LJSpeechAsrDataModule
+from asr_datamodule import UserLibriAsrDataModule, LJSpeechAsrDataModule, L2ArcticAsrDataModule
 from decoder import Decoder
 from joiner import Joiner
 from lhotse.cut import Cut
@@ -1289,7 +1289,7 @@ def train_one_epoch(
             if o_loss is not None:
                 curr_loss = loss * params.world_size / loss_info["utterances"]
                 o_loss = o_loss * params.world_size / loss_info["utterances"]
-                if (curr_loss / o_loss) > 1.0168:
+                if (curr_loss / o_loss) > 1.017:
                     logging.info(
                         f"Current bath loss: {curr_loss}, "
                         f"Previous batch loss {o_loss}, "
@@ -1658,6 +1658,13 @@ def run(rank, world_size, args, wb=None):
         train_cuts = ljspeech.train_cuts(pseudo=args.use_pseudo_labels, pseudo_name=pseudo_name)
         valid_cuts = ljspeech.dev_cuts()
 
+    elif params.train_dataset == "l2arctic":
+        l2arctic = L2ArcticAsrDataModule(args)
+        if params.train_individual is None:
+            raise NotImplementedError
+        train_cuts = l2arctic.individual_cuts(params.train_individual, pseudo=args.use_pseudo_labels, pseudo_name=pseudo_name)
+        valid_cuts = l2arctic.dev_cuts(params.train_individual)
+
     def remove_short_and_long_utt(c: Cut):
         # Keep only utterances with duration between 1 second and 20 seconds
         #
@@ -1688,6 +1695,13 @@ def run(rank, world_size, args, wb=None):
             train_cuts, sampler_state_dict=sampler_state_dict
         )
         valid_dl = ljspeech.valid_dataloaders(valid_cuts)
+    elif params.train_dataset == "l2arctic":
+        train_dl = l2arctic.train_dataloaders(
+            train_cuts, sampler_state_dict=sampler_state_dict
+        )
+        valid_dl = l2arctic.valid_dataloaders(valid_cuts)
+    else:
+        raise NotImplementedError()
     
     '''
     if not params.print_diagnostics:

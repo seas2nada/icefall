@@ -48,7 +48,7 @@ import k2
 import sentencepiece as spm
 import torch
 import torch.nn as nn
-from asr_datamodule import LibriSpeechAsrDataModule, UserLibriAsrDataModule
+from asr_datamodule import LibriSpeechAsrDataModule, UserLibriAsrDataModule, L2ArcticAsrDataModule
 from beam_search import (
     beam_search,
     fast_beam_search_nbest,
@@ -894,6 +894,33 @@ def main():
                 results_dict=results_dict,
             )
 
+    elif args.test_dataset == "l2arctic":
+        l2arctic = L2ArcticAsrDataModule(args)
+
+        if args.decode_individual is None:
+            raise NotImplementedError("need decode_individual")
+
+        test_cuts = l2arctic.individual_cuts(args.decode_individual)
+        test_dl = l2arctic.test_dataloaders(test_cuts)
+
+        test_sets = [args.decode_individual]
+        train_dl_ = [test_dl]
+
+        for test_set, test_dl in zip(test_sets, train_dl_):
+            results_dict = decode_dataset(
+                dl=test_dl,
+                params=params,
+                model=model,
+                sp=sp,
+                word_table=word_table,
+                decoding_graph=decoding_graph,
+            )
+
+            save_results(
+                params=params,
+                test_set_name=test_set,
+                results_dict=results_dict,
+            )
     else:
         raise NotImplementedError("")
 
