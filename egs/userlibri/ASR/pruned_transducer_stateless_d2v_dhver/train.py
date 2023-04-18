@@ -66,7 +66,7 @@ import sentencepiece as spm
 import torch
 import torch.multiprocessing as mp
 import torch.nn as nn
-from asr_datamodule import UserLibriAsrDataModule
+from asr_datamodule import UserLibriAsrDataModule, LJSpeechAsrDataModule
 from decoder import Decoder
 from joiner import Joiner
 from lhotse.cut import Cut
@@ -282,6 +282,12 @@ def add_rep_arguments(parser: argparse.ArgumentParser):
         "--l2",
         type=str2bool,
         default=False,
+    )
+
+    parser.add_argument(
+        "--train-dataset",
+        type=str,
+        default='userlibri',
     )
         
 
@@ -1636,16 +1642,21 @@ def run(rank, world_size, args, wb=None):
     if params.inf_check:
         register_inf_check_hooks(model)
 
-    userlibri = UserLibriAsrDataModule(args)
-
     pseudo_name = args.pseudo_name if args.use_pseudo_labels else None
-    if params.train_individual is not None:
-        assert params.individual_bookid is not None
-        train_cuts = userlibri.individual_cuts(params.individual_bookid, pseudo=args.use_pseudo_labels, pseudo_name=pseudo_name)
-        valid_cuts = userlibri.dev_cuts(params.train_individual)
-    else:
-        train_cuts = userlibri.train_cuts(pseudo=args.use_pseudo_labels, pseudo_name=pseudo_name)
-        valid_cuts = userlibri.dev_cuts()
+    if params.train_dataset == "userlibri":
+        userlibri = UserLibriAsrDataModule(args)
+
+        if params.train_individual is not None:
+            assert params.individual_bookid is not None
+            train_cuts = userlibri.individual_cuts(params.individual_bookid, pseudo=args.use_pseudo_labels, pseudo_name=pseudo_name)
+            valid_cuts = userlibri.dev_cuts(params.train_individual)
+        else:
+            train_cuts = userlibri.train_cuts(pseudo=args.use_pseudo_labels, pseudo_name=pseudo_name)
+            valid_cuts = userlibri.dev_cuts()
+    elif params.train_dataset == "ljspeech":
+        ljspeech = LJSpeechAsrDataModule(args)
+        train_cuts = ljspeech.train_cuts(pseudo=args.use_pseudo_labels, pseudo_name=pseudo_name)
+        valid_cuts = ljspeech.dev_cuts()
 
     def remove_short_and_long_utt(c: Cut):
         # Keep only utterances with duration between 1 second and 20 seconds
@@ -1667,10 +1678,16 @@ def run(rank, world_size, args, wb=None):
     else:
         sampler_state_dict = None
 
-    train_dl = userlibri.train_dataloaders(
-        train_cuts, sampler_state_dict=sampler_state_dict
-    )
-    valid_dl = userlibri.valid_dataloaders(valid_cuts)
+    if params.train_dataset == "userlibri":
+        train_dl = userlibri.train_dataloaders(
+            train_cuts, sampler_state_dict=sampler_state_dict
+        )
+        valid_dl = userlibri.valid_dataloaders(valid_cuts)
+    elif params.train_dataset == "ljspeech":
+        train_dl = ljspeech.train_dataloaders(
+            train_cuts, sampler_state_dict=sampler_state_dict
+        )
+        valid_dl = ljspeech.valid_dataloaders(valid_cuts)
     
     '''
     if not params.print_diagnostics:

@@ -19,12 +19,9 @@ log() {
 }
 
 model_dir=pruned_transducer_stateless_d2v_dhver
-# ft_model=./$model_dir/d2v-T-reproduce/best-valid-loss.pt
 ft_model=./$model_dir/M_0/libri_prefinetuned.pt
-# individual="speaker-1995"
-# bookid="15265"
-# individual="speaker-1998"
-# bookid="1998tts"
+# datset: librispeech, ljspeech, userlibri
+train_dataset="userlibri"
 test_dataset="userlibri"
 EMA=0.099
 flel=9
@@ -47,6 +44,7 @@ for bookid in $bookid_list; do
     log "Stage 0: Train model"
     ./pruned_transducer_stateless_d2v_dhver/train.py \
             --wandb False \
+            --train-dataset $train_dataset \
             --lwf $lwf \
             --l2 $l2 \
             --train-individual $individual \
