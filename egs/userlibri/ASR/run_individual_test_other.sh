@@ -32,20 +32,23 @@ fz_enc=False
 fz_dec=False
 fz_decemb=True
 ctc_scale=0.0
+lwf=True
+l2=False
 max_epoch=20
-# bookid_list=$(cat /DB/UserLibri/userlibri_test_other_tts/list.txt)
-bookid_list=$(cat /DB/UserLibri/userlibri_test_clean_tts/list.txt)
+bookid_list=$(cat /DB/UserLibri/userlibri_test_other_tts/list.txt)
 for bookid in $bookid_list; do
   sid=$(echo $bookid | awk -F 'tts' '{print $1}')
   individual="speaker-$sid"
 
-  # expdir=./$model_dir/M_${individual}_book-${bookid}_EMA-${EMA}_fz-enc$fz_enc-lowenc$flel-dec$fz_dec-decemb$fz_decemb-ctc${ctc_scale}
+  # expdir=./$model_dir/M_${individual}_book-${bookid}_EMA-${EMA}_fz-enc$fz_enc-lowenc$flel-dec$fz_dec-decemb$fz_decemb-ctc${ctc_scale}_lwf${lwf}_l2$l2
   expdir=./$model_dir/M_${individual}_book-${bookid}_test
   pn=UserLibri_iter0
   if [ $stage -le 0 ] && [ $stop_stage -ge 0 ]; then
     log "Stage 0: Train model"
     ./pruned_transducer_stateless_d2v_dhver/train.py \
             --wandb False \
+            --lwf $lwf \
+            --l2 $l2 \
             --train-individual $individual \
             --individual-bookid $bookid \
             --use-pseudo-labels False \
@@ -81,8 +84,7 @@ for bookid in $bookid_list; do
             --freeze-encoder $fz_enc \
             --freeze-decoder $fz_dec \
             --freeze-joiner False \
-            --decode-interval 9999999 \
-            --enable-musan False
+            --enable-musan True
     
     mv $expdir/epoch-$max_epoch.pt $expdir/last-epoch.pt
     rm -rf $expdir/epoch-*

@@ -85,6 +85,8 @@ class Transducer(nn.Module):
         prune_range: int = 5,
         am_scale: float = 0.0,
         lm_scale: float = 0.0,
+        online_model = None,
+        l2_state_dict = None,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Args:
@@ -119,6 +121,7 @@ class Transducer(nn.Module):
         assert y.num_axes == 2, y.num_axes
 
         assert x.size(0) == x_lens.size(0) == y.dim0
+        x_lens_org = x_lens
 
         encoder_out, x_lens = self.encoder(x, x_lens)
         assert torch.all(x_lens > 0)
@@ -195,7 +198,74 @@ class Transducer(nn.Module):
                 boundary=boundary,
                 reduction="sum",
             )
-        return (simple_loss, pruned_loss, ctc_output)
+        
+        reg_loss = 0.0
+        o_simple_loss, o_pruned_loss = None, None
+        if online_model is not None:
+          with torch.no_grad():
+            o_encoder_out, x_lens = online_model.module.encoder(x, x_lens_org)
+            o_ctc_output = online_model.module.ctc_output(o_encoder_out)
+
+            # decoder_out: [B, S + 1, decoder_dim]
+            o_decoder_out = online_model.module.decoder(sos_y_padded)
+
+            # lm = self.simple_lm_proj(o_decoder_out)
+            # am = self.simple_am_proj(o_encoder_out)
+
+            with torch.cuda.amp.autocast(enabled=False):
+                o_simple_loss, (px_grad, py_grad) = k2.rnnt_loss_smoothed(
+                    lm=lm.float(),
+                    am=am.float(),
+                    symbols=y_padded,
+                    termination_symbol=blank_id,
+                    lm_only_scale=lm_scale,
+                    am_only_scale=am_scale,
+                    boundary=boundary,
+                    reduction="sum",
+                    return_grad=True,
+                )
+
+            # ranges : [B, T, prune_range]
+            ranges = k2.get_rnnt_prune_ranges(
+                px_grad=px_grad,
+                py_grad=py_grad,
+                boundary=boundary,
+                s_range=prune_range,
+            )
+
+            # am_pruned : [B, T, prune_range, encoder_dim]
+            # lm_pruned : [B, T, prune_range, decoder_dim]
+              
+            o_am_pruned, o_lm_pruned = k2.do_rnnt_pruning(
+              am=online_model.module.joiner.encoder_proj(o_encoder_out),
+              lm=online_model.module.joiner.decoder_proj(o_decoder_out),
+              ranges=ranges,
+            )
+            o_logits = self.joiner(o_am_pruned, o_lm_pruned, project_input=False)
+
+            with torch.cuda.amp.autocast(enabled=False):
+              o_pruned_loss = k2.rnnt_loss_pruned(
+                  logits=o_logits.float(),
+                  symbols=y_padded,
+                  ranges=ranges,
+                  termination_symbol=blank_id,
+                  boundary=boundary,
+                  reduction="sum",
+              )
+        
+          # reg_loss = 0.1 * torch.nn.functional.kl_div(ctc_output.float().log_softmax(1), o_ctc_output.float().softmax(1), reduction="none").sum(1)
+          # reg_loss += 0.5 * torch.nn.functional.kl_div(logits.float().log_softmax(1), o_logits.float().softmax(1), reduction="none").sum(1)
+        elif l2_state_dict is not None:
+          n_grad_param = 0
+          for name, p in self.named_parameters():
+            if "encoder.encoders.feature_extractor" in name:
+              continue
+            if p.requires_grad:
+              reg_loss += torch.nn.functional.mse_loss(p.float(), l2_state_dict[name].float(), reduction='sum')
+              n_grad_param += 1
+          reg_loss = (reg_loss / n_grad_param).type_as(p)
+
+        return (simple_loss, pruned_loss, reg_loss, ctc_output, (o_simple_loss, o_pruned_loss))
 
     def decode(
         self,

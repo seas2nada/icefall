@@ -57,21 +57,28 @@ fi
 if [ $stage -le 1 ] && [ $stop_stage -ge 1 ]; then
   log "Stage 1: Decoding"
   # modified_beam_search, greedy_search, ctc_greedy_search
+  expdir=./$model_dir/M_0
+  model_name="libri_prefinetuned.pt"
+  test_dataset="librispeech"
   for method in modified_beam_search; do
     ./pruned_transducer_stateless_d2v_dhver/decode.py \
-      --input-strategy AudioSamples \
-      --enable-spec-aug False \
-      --additional-block True \
-      --model-name best-valid-loss.pt \
-      --exp-dir $expdir \
-      --max-duration 400 \
-      --decoding-method $method \
-      --max-sym-per-frame 1 \
-      --encoder-type d2v \
-      --encoder-dim 768 \
-      --decoder-dim 768 \
-      --joiner-dim 768
+        --test-dataset $test_dataset \
+        --gen-pseudo-label False \
+        --input-strategy AudioSamples \
+        --enable-spec-aug False \
+        --additional-block True \
+        --model-name $model_name \
+        --exp-dir $expdir \
+        --num-buckets 2 \
+        --max-duration 400 \
+        --decoding-method $method \
+        --max-sym-per-frame 1 \
+        --encoder-type d2v \
+        --encoder-dim 768 \
+        --decoder-dim 768 \
+        --joiner-dim 768
   done
+  
 fi
 # TODO:
 # --gen-pseudo-label False \

@@ -271,6 +271,18 @@ def add_rep_arguments(parser: argparse.ArgumentParser):
         type=str2bool,
         default=False,
     )
+
+    parser.add_argument(
+        "--lwf",
+        type=str2bool,
+        default=False,
+    )
+
+    parser.add_argument(
+        "--l2",
+        type=str2bool,
+        default=False,
+    )
         
 
 def add_model_arguments(parser: argparse.ArgumentParser):
@@ -611,6 +623,7 @@ def get_params() -> AttributeDict:
             "best_train_epoch": -1,
             "best_valid_epoch": -1,
             "best_wer_epoch": -1,
+            "loss_threshold": 300, # For sample selection
             "batch_idx_train": 0,
             "log_interval": 50,
             "reset_interval": 200,
@@ -919,6 +932,8 @@ def compute_loss(
     batch: dict,
     is_training: bool,
     decode: bool = False,
+    online_model = None,
+    l2_state_dict = None,
 ) -> Tuple[Tensor, MetricsTracker]:
     """
     Compute transducer loss given the model and its inputs.
@@ -989,13 +1004,15 @@ def compute_loss(
     y = k2.RaggedTensor(token_ids).to(device)
 
     with torch.set_grad_enabled(is_training):
-        simple_loss, pruned_loss, ctc_output = model(
+        simple_loss, pruned_loss, reg_loss, ctc_output, o_losses = model(
             x=feature,
             x_lens=feature_lens,
             y=y,
             prune_range=params.prune_range,
             am_scale=params.am_scale,
             lm_scale=params.lm_scale,
+            online_model=online_model if is_training else None,
+            l2_state_dict=l2_state_dict if is_training else None,
         )
 
         s = params.simple_loss_scale
@@ -1013,6 +1030,12 @@ def compute_loss(
         )
 
         loss = simple_loss_scale * simple_loss + pruned_loss_scale * pruned_loss
+        
+        if o_losses[0] is not None:
+            o_loss = simple_loss_scale * o_losses[0] + pruned_loss_scale * o_losses[1]
+            o_loss = o_loss.detach().cpu().item()
+        else:
+            o_loss = None
     
     info = MetricsTracker()
     
@@ -1050,6 +1073,7 @@ def compute_loss(
     
         info["ctc_loss"] = ctc_loss.detach().cpu().item()
     
+    loss += reg_loss
     assert loss.requires_grad == is_training
 
     if decode:
@@ -1077,8 +1101,12 @@ def compute_loss(
     info["loss"] = loss.detach().cpu().item()
     info["simple_loss"] = simple_loss.detach().cpu().item()
     info["pruned_loss"] = pruned_loss.detach().cpu().item()
+    info["reg_loss"] = reg_loss
 
-    return loss, info
+    if is_training:
+        return loss, info, o_loss
+    else:
+        return loss, info
 
 
 def compute_validation_loss(
@@ -1173,6 +1201,8 @@ def train_one_epoch(
     world_size: int = 1,
     rank: int = 0,
     wb = None,
+    online_model = None,
+    l2_state_dict = None,
 ) -> None:
     """Train the model for one epoch.
 
@@ -1225,15 +1255,41 @@ def train_one_epoch(
 
         try:
             with torch.cuda.amp.autocast(enabled=params.use_fp16):
-                loss, loss_info = compute_loss(
+                loss, loss_info, o_loss = compute_loss(
                     params=params,
                     model=model,
                     sp=sp,
                     batch=batch,
                     is_training=True,
                     decode = True if batch_idx % params.decode_interval == 0 else False,
+                    online_model = online_model,
+                    l2_state_dict = l2_state_dict,
                 )
             loss_info.reduce(loss.device)
+
+            ### Naive data filtering ###
+            # curr_loss = loss * params.world_size / loss_info["utterances"]
+            # if curr_loss > (1 + 4 * (params.num_epochs - params.cur_epoch) / params.num_epochs) * params.loss_threshold:
+            #     logging.info(
+            #         f"Current bath loss: {curr_loss}, "
+            #         f"Loss threshold {(1 + 4 * params.cur_epoch / params.num_epochs) * params.loss_threshold}, "
+            #         "Skip current batch for training"
+            #         )
+            #     loss *= 1e-6
+            # loss_scale = max(1, params.loss_threshold / loss.detach().cpu())
+            # loss *= loss_scale
+
+            ### loss ratio ###
+            if o_loss is not None:
+                curr_loss = loss * params.world_size / loss_info["utterances"]
+                o_loss = o_loss * params.world_size / loss_info["utterances"]
+                if (curr_loss / o_loss) > 1.0168:
+                    logging.info(
+                        f"Current bath loss: {curr_loss}, "
+                        f"Previous batch loss {o_loss}, "
+                        "Skip current batch for training"
+                    )
+                    loss *= 1e-6
 
             numel = params.world_size / (params.accum_grads * loss_info["utterances"])
             loss *= numel ## normalize loss over utts(batch size)
@@ -1416,6 +1472,9 @@ def train_one_epoch(
 
     loss_value = tot_loss["loss"] / tot_loss["utterances"]
     params.train_loss = loss_value
+    if loss_value < params.loss_threshold:
+        params.loss_threshold = loss_value
+
     if params.train_loss < params.best_train_loss:
         params.best_train_epoch = params.cur_epoch
         params.best_train_loss = params.train_loss
@@ -1629,6 +1688,13 @@ def run(rank, world_size, args, wb=None):
         logging.info("Loading grad scaler state dict")
         scaler.load_state_dict(checkpoints["grad_scaler"])
 
+    # For weight reg
+    to_online_model = None
+    l2_state_dict = {}
+    for name, p in model.module.named_parameters():
+        l2_state_dict[name] = p.data.detach().clone()
+    l2_state_dict_to = l2_state_dict
+
     for epoch in range(params.start_epoch, params.num_epochs + 1):
         if params.multi_optim:
             scheduler_enc.step_epoch(epoch - 1)
@@ -1642,6 +1708,21 @@ def run(rank, world_size, args, wb=None):
             tb_writer.add_scalar("train/epoch", epoch, params.batch_idx_train)
 
         params.cur_epoch = epoch
+
+        if params.lwf:
+            online_model = copy.deepcopy(to_online_model)
+            to_online_model = copy.deepcopy(model)
+            if online_model is not None:
+                # online_model.eval()
+                for param in online_model.parameters():
+                    param.requires_grad = False
+        else:
+            online_model = None
+
+        if params.l2:
+            l2_state_dict = None if epoch == params.start_epoch else copy.deepcopy(l2_state_dict_to)
+            for name, p in model.module.named_parameters():
+                l2_state_dict_to[name] = p.data.detach().clone()
 
         train_one_epoch(
             params=params,
@@ -1657,6 +1738,8 @@ def run(rank, world_size, args, wb=None):
             world_size=world_size,
             rank=rank,
             wb=wb,
+            online_model=online_model,
+            l2_state_dict=l2_state_dict,
         )
 
         if params.ema_alpha != 1:
@@ -1667,7 +1750,7 @@ def run(rank, world_size, args, wb=None):
                 start_weight = 1 - (params.cur_epoch / params.num_epochs)
                 end_weight = 1 - start_weight
                 alpha = start_weight * ema_decay + end_weight * ema_end_decay
-
+        
                 for name, p in model.named_parameters():
                     p_org = org_state_dict[name]
                     p.copy_(alpha * p.data + (1 - alpha) * p_org)
