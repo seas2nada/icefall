@@ -36,6 +36,8 @@ egs/userlibri/ASR/userlibri_results*
 egs/userlibri/ASR/pruned_transducer_stateless_d2v_dhver/M*
 egs/userlibri/ASR/M*
 egs/userlibri/ASR/validation_state
+egs/userlibri/ASR/pruned_transducer_stateless_conformer/M*
+egs/userlibri/ASR/pruned_transducer_stateless_conformer/C*
 
 egs/LJSpeech/ASR/pruned_transducer_stateless_d2v_v2/d2v-T*
 egs/LJSpeech/ASR/pruned_transducer_stateless_d2v_v2/M*
