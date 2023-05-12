@@ -82,13 +82,31 @@ fi
 if [ $stage -le 1 ] && [ $stop_stage -ge 1 ]; then
     log "Stage 1: Decoding"
     # modified_beam_search, greedy_search, ctc_greedy_search
-    for model_name in "best-valid-wer.pt"; do
+    # for model_name in "best-valid-wer.pt"; do
+    #     for method in modified_beam_search; do
+    #         ./pruned_transducer_stateless_d2v_dhver/decode_LJSpeech.py \
+    #         --gen-pseudo-label False \
+    #         --input-strategy AudioSamples \
+    #         --enable-spec-aug False \
+    #         --additional-block True \
+    #         --model-name $model_name \
+    #         --exp-dir $expdir \
+    #         --num-buckets 2 \
+    #         --max-duration 400 \
+    #         --decoding-method $method \
+    #         --max-sym-per-frame 1 \
+    #         --encoder-type d2v \
+    #         --encoder-dim 768 \
+    #         --decoder-dim 768 \
+    #         --joiner-dim 768
+    #     done
+    # done
+
+    for model_name in "libri_prefinetuned.pt"; do
+        expdir=pruned_transducer_stateless_d2v_dhver/M_0
         for method in modified_beam_search; do
             ./pruned_transducer_stateless_d2v_dhver/decode_LJSpeech.py \
             --gen-pseudo-label False \
-            --input-strategy AudioSamples \
-            --enable-spec-aug False \
-            --additional-block True \
             --model-name $model_name \
             --exp-dir $expdir \
             --num-buckets 2 \

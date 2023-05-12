@@ -1157,7 +1157,7 @@ def train_one_epoch(
             if o_loss is not None:
                 curr_loss = loss * params.world_size / loss_info["utterances"]
                 o_loss = o_loss * params.world_size / loss_info["utterances"]
-                if (curr_loss / o_loss) > 1.017:
+                if (curr_loss / o_loss) > 1.037:
                     logging.info(
                         f"Current bath loss: {curr_loss}, "
                         f"Previous batch loss {o_loss}, "
@@ -1384,6 +1384,10 @@ def run(rank, world_size, args, wb=None):
     if world_size > 1:
         logging.info("Using DDP")
         model = DDP(model, device_ids=[rank], find_unused_parameters=True)
+
+    org_state_dict = {}
+    for n, p in model.named_parameters():
+        org_state_dict[n] = p.data.clone()
     
     parameters_names = []
     parameters_names.append(
