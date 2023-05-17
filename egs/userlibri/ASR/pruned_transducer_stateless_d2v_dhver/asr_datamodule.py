@@ -1578,8 +1578,8 @@ class L2ArcticAsrDataModule:
         )
 
     @lru_cache()
-    def dev_cuts(self, spk_name="speaker-2609") -> CutSet:
-        logging.info("About to get L2Arctic dev cuts")
+    def test_cuts(self, spk_name="speaker-2609") -> CutSet:
+        logging.info("About to get L2Arctic test cuts")
         
         return load_manifest_lazy(
             self.args.manifest_dir / f"l2arctic_cuts_{spk_name}_test.jsonl.gz"
