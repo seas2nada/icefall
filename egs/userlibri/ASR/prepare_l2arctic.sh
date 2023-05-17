@@ -127,7 +127,7 @@ if [ $stage -le 1 ] && [ $stop_stage -ge 1 ]; then
         fi
 
         log "Validating data/fbank for l2arctic/$name"
-        parts=`ls /DB/l2arctic/$name/wavs/`
+        parts=`ls /DB/l2arctic/$name/wavs/ -I *.txt`
         for part in ${parts[@]}; do
             python3 ./local/validate_manifest.py \
                 data/fbank/l2arctic_cuts_${name}_${part}.jsonl.gz

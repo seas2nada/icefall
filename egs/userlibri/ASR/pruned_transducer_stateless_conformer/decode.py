@@ -897,7 +897,7 @@ def main():
         if args.decode_individual is None:
             raise NotImplementedError("need decode_individual")
 
-        test_cuts = l2arctic.individual_cuts(args.decode_individual)
+        test_cuts = l2arctic.test_cuts(args.decode_individual)
         test_dl = l2arctic.test_dataloaders(test_cuts)
 
         test_sets = [args.decode_individual]
