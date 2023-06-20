@@ -20,34 +20,31 @@ log() {
 
 model_dir=pruned_transducer_stateless_d2v_dhver
 ft_model=./$model_dir/M_0/libri_prefinetuned.pt
-# datset: librispeech, ljspeech, userlibri
-train_dataset="l2arctic"
-test_dataset="l2arctic"
-EMA=1
+test_dataset="userlibri"
+EMA=0.099
 flel=9
 fz_enc=False
 fz_dec=False
 fz_decemb=True
 ctc_scale=0.0
-lwf=False
-l2=False
 max_epoch=20
-bookid_list=$(cat /DB/l2arctic/list.txt)
+# bookid_list=$(cat /DB/UserLibri/userlibri_test_other_tts/list.txt)
+bookid_list=$(cat /DB/UserLibri/userlibri_test_clean_tts/list.txt)
 for bookid in $bookid_list; do
-  individual=$bookid
+  sid=$(echo $bookid | awk -F 'tts' '{print $1}')
+  individual="speaker-$sid"
 
-  expdir=./$model_dir/M_l2arctictts_${individual}_fz
+  expdir=./$model_dir/M_${individual}_book-${bookid}_lmratio_test
+  pn=UserLibri_iter0
   if [ $stage -le 0 ] && [ $stop_stage -ge 0 ]; then
     log "Stage 0: Train model"
     ./pruned_transducer_stateless_d2v_dhver/train.py \
             --wandb False \
-            --train-dataset $train_dataset \
-            --lwf $lwf \
-            --l2 $l2 \
             --train-individual $individual \
             --individual-bookid $bookid \
             --use-pseudo-labels False \
             --on-the-fly-pseudo-labels False \
+            --pseudo-name $pn \
             --load-prefinetuned-model $ft_model \
             --input-strategy AudioSamples \
             --enable-spec-aug False \
@@ -78,22 +75,43 @@ for bookid in $bookid_list; do
             --freeze-encoder $fz_enc \
             --freeze-decoder $fz_dec \
             --freeze-joiner False \
-            --enable-musan True
+            --decode-interval 9999999 \
+            --enable-musan False \
+            --rnn-lm-exp-dir rnnlm_model/epoch-30.pt \
+            --p13n-rnn-lm-exp-dir p13n_rnnlm_model/exp_${sid}/epoch-39.pt
     
     mv $expdir/epoch-$max_epoch.pt $expdir/last-epoch.pt
     rm -rf $expdir/epoch-*
   fi
-  # --peak-dec-lr 0.04175 \
-  # --peak-enc-lr 0.0003859 \
-  # TODO:
-  # 1. Cross validation
-  # 2. Low rank adaptation
-  # 3. Importance sampling of parameters
 
   if [ $stage -le 1 ] && [ $stop_stage -ge 1 ]; then
     log "Stage 1: Decoding"
     # modified_beam_search, greedy_search, ctc_greedy_search
-    for model_name in "best-valid-wer.pt" "best-train-loss.pt"; do
+    for model_name in "best-valid-wer.pt" "last-epoch.pt"; do
+      test_dataset="userlibri"
+      ./pruned_transducer_stateless_d2v_dhver/decode_rnnlm.py \
+      --test-dataset $test_dataset \
+      --decode-individual $individual \
+      --gen-pseudo-label False \
+      --input-strategy AudioSamples \
+      --enable-spec-aug False \
+      --additional-block True \
+      --model-name $model_name \
+      --exp-dir $expdir \
+      --encoder-type d2v \
+      --encoder-dim 768 \
+      --decoder-dim 768 \
+      --joiner-dim 768 \
+      --max-duration 600 \
+      --decoding-method modified_beam_search_rnnlm_shallow_fusion \
+      --beam 4 \
+      --rnn-lm-scale 0.15 \
+      --rnn-lm-exp-dir p13n_rnnlm_model/exp_${sid} \
+      --rnn-lm-epoch 39 \
+      --rnn-lm-avg 1 \
+      --rnn-lm-num-layers 3 \
+      --rnn-lm-tie-weights 1
+
       for method in modified_beam_search; do
           ./pruned_transducer_stateless_d2v_dhver/decode.py \
           --test-dataset $test_dataset \
@@ -115,26 +133,5 @@ for bookid in $bookid_list; do
       done
       mv $expdir/$method/wer-summary-$individual-beam_size_4-epoch-30-avg-9-$method-beam-size-4-use-averaged-model.txt $expdir/$method/wer-$model_name-summary-$individual-beam_size_4-epoch-30-avg-9-$method-beam-size-4-use-averaged-model.txt
     done
-    # expdir=./$model_dir/M_0
-    # model_name="libri_prefinetuned.pt"
-    # for method in modified_beam_search; do
-    #     ./pruned_transducer_stateless_d2v_dhver/decode.py \
-    #     --test-dataset $test_dataset \
-    #     --decode-individual $individual \
-    #     --gen-pseudo-label False \
-    #     --input-strategy AudioSamples \
-    #     --enable-spec-aug False \
-    #     --additional-block True \
-    #     --model-name $model_name \
-    #     --exp-dir $expdir \
-    #     --num-buckets 2 \
-    #     --max-duration 400 \
-    #     --decoding-method $method \
-    #     --max-sym-per-frame 1 \
-    #     --encoder-type d2v \
-    #     --encoder-dim 768 \
-    #     --decoder-dim 768 \
-    #     --joiner-dim 768
-    # done
   fi
 done

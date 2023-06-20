@@ -36,7 +36,7 @@ bookid_list=$(cat /DB/l2arctic/list.txt)
 for bookid in $bookid_list; do
   individual=$bookid
 
-  expdir=./$model_dir/M_l2arctictts_${individual}_fz
+  expdir=./$model_dir/M_l2arctictts_${individual}_lmratio_test
   if [ $stage -le 0 ] && [ $stop_stage -ge 0 ]; then
     log "Stage 0: Train model"
     ./pruned_transducer_stateless_d2v_dhver/train.py \
@@ -78,7 +78,8 @@ for bookid in $bookid_list; do
             --freeze-encoder $fz_enc \
             --freeze-decoder $fz_dec \
             --freeze-joiner False \
-            --enable-musan True
+            --enable-musan True \
+            --p13n-rnn-lm-exp-dir p13n_rnnlm_model/exp_${sid}/epoch-39.pt
     
     mv $expdir/epoch-$max_epoch.pt $expdir/last-epoch.pt
     rm -rf $expdir/epoch-*

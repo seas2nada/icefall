@@ -80,6 +80,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.tensorboard import SummaryWriter
 from zipformer import Zipformer
 from data2vec_encoder import FairSeqData2VecEncoder
+from rnnlm_model import RnnLmModel
 
 from icefall import diagnostics
 from icefall.checkpoint import remove_checkpoints
@@ -273,21 +274,21 @@ def add_rep_arguments(parser: argparse.ArgumentParser):
     )
 
     parser.add_argument(
-        "--lwf",
-        type=str2bool,
-        default=False,
-    )
-
-    parser.add_argument(
-        "--l2",
-        type=str2bool,
-        default=False,
-    )
-
-    parser.add_argument(
         "--train-dataset",
         type=str,
         default='userlibri',
+    )
+
+    parser.add_argument(
+        "--rnn-lm-exp-dir",
+        type=str,
+        default=None,
+    )
+    
+    parser.add_argument(
+        "--p13n-rnn-lm-exp-dir",
+        type=str,
+        default=None,
     )
         
 
@@ -939,7 +940,8 @@ def compute_loss(
     is_training: bool,
     decode: bool = False,
     online_model = None,
-    l2_state_dict = None,
+    rnn_lm = None,
+    p13n_rnn_lm = None,
 ) -> Tuple[Tensor, MetricsTracker]:
     """
     Compute transducer loss given the model and its inputs.
@@ -988,14 +990,24 @@ def compute_loss(
         with torch.no_grad():
             method = "modified_beam_search"
             # method = "fast_beam_search_nbest"
-            hypos = model.module.decode(
-                x=feature,
-                x_lens=feature_lens,
-                y=None,
-                sp=sp,
-                decoding_graph=decoding_graph,
-                method=method,
-            )
+            if params.world_size > 1:
+                hypos = model.module.decode(
+                    x=feature,
+                    x_lens=feature_lens,
+                    y=None,
+                    sp=sp,
+                    decoding_graph=decoding_graph,
+                    method=method,
+                )
+            else:
+                hypos = model.module.decode(
+                    x=feature,
+                    x_lens=feature_lens,
+                    y=None,
+                    sp=sp,
+                    decoding_graph=decoding_graph,
+                    method=method,
+                )
 
             texts = []
             for hyp in hypos:
@@ -1010,7 +1022,7 @@ def compute_loss(
     y = k2.RaggedTensor(token_ids).to(device)
 
     with torch.set_grad_enabled(is_training):
-        simple_loss, pruned_loss, reg_loss, ctc_output, o_losses = model(
+        simple_loss, pruned_loss, ctc_output, data_reg = model(
             x=feature,
             x_lens=feature_lens,
             y=y,
@@ -1018,7 +1030,8 @@ def compute_loss(
             am_scale=params.am_scale,
             lm_scale=params.lm_scale,
             online_model=online_model if is_training else None,
-            l2_state_dict=l2_state_dict if is_training else None,
+            rnn_lm=rnn_lm if is_training else None,
+            p13n_rnn_lm=p13n_rnn_lm if is_training else None,
         )
 
         s = params.simple_loss_scale
@@ -1037,11 +1050,19 @@ def compute_loss(
 
         loss = simple_loss_scale * simple_loss + pruned_loss_scale * pruned_loss
         
-        if o_losses[0] is not None:
+        reduction = "sum"
+        if isinstance(data_reg, tuple):
+            o_losses = data_reg
             o_loss = simple_loss_scale * o_losses[0] + pruned_loss_scale * o_losses[1]
             o_loss = o_loss.detach().cpu().item()
+            data_reg = {"loss_ratio" : o_loss}
+        elif isinstance(data_reg, torch.Tensor):
+            reduction = "none"
+            lm_ratio = data_reg
+            data_reg = {"lm_ratio" : lm_ratio}
         else:
-            o_loss = None
+            if is_training:
+                raise NotImplementedError("undefined data regularization method")
     
     info = MetricsTracker()
     
@@ -1071,28 +1092,39 @@ def compute_loss(
             decoding_graph=decoding_graph,
             dense_fsa_vec=dense_fsa_vec,
             output_beam=params.beam_size,
-            reduction="sum",
+            reduction=reduction,
             use_double_scores=params.use_double_scores,
         )
+        if reduction == "none":
+            ctc_loss *= data_reg["lm_ratio"]
+            ctc_loss = ctc_loss.sum()
         assert ctc_loss.requires_grad == is_training
         loss += params.ctc_loss_scale * ctc_loss
     
         info["ctc_loss"] = ctc_loss.detach().cpu().item()
     
-    loss += reg_loss
     assert loss.requires_grad == is_training
 
     if decode:
         model.eval()
         with torch.no_grad():
             if not params.on_the_fly_pseudo_labels:
-                hypos = model.module.decode(
-                    x=feature,
-                    x_lens=feature_lens,
-                    y=y,
-                    sp=sp
-                )
-                supervision_ref = batch["supervisions"]["text"][0]
+                if params.world_size > 1:
+                    hypos = model.module.decode(
+                        x=feature,
+                        x_lens=feature_lens,
+                        y=y,
+                        sp=sp
+                    )
+                    supervision_ref = batch["supervisions"]["text"][0]
+                else:
+                    hypos = model.decode(
+                        x=feature,
+                        x_lens=feature_lens,
+                        y=y,
+                        sp=sp
+                    )
+                    supervision_ref = batch["supervisions"]["text"][0]
             
             logging.info(f'ref: {supervision_ref}')
             logging.info(f'hyp: {" ".join(hypos[0])}')
@@ -1107,10 +1139,9 @@ def compute_loss(
     info["loss"] = loss.detach().cpu().item()
     info["simple_loss"] = simple_loss.detach().cpu().item()
     info["pruned_loss"] = pruned_loss.detach().cpu().item()
-    info["reg_loss"] = reg_loss
 
     if is_training:
-        return loss, info, o_loss
+        return loss, info, data_reg
     else:
         return loss, info
 
@@ -1208,7 +1239,8 @@ def train_one_epoch(
     rank: int = 0,
     wb = None,
     online_model = None,
-    l2_state_dict = None,
+    rnn_lm = None,
+    p13n_rnn_lm = None,
 ) -> None:
     """Train the model for one epoch.
 
@@ -1261,7 +1293,7 @@ def train_one_epoch(
 
         try:
             with torch.cuda.amp.autocast(enabled=params.use_fp16):
-                loss, loss_info, o_loss = compute_loss(
+                loss, loss_info, data_reg = compute_loss(
                     params=params,
                     model=model,
                     sp=sp,
@@ -1269,10 +1301,13 @@ def train_one_epoch(
                     is_training=True,
                     decode = True if batch_idx % params.decode_interval == 0 else False,
                     online_model = online_model,
-                    l2_state_dict = l2_state_dict,
+                    rnn_lm = rnn_lm,
+                    p13n_rnn_lm = p13n_rnn_lm,
                 )
             loss_info.reduce(loss.device)
 
+            # Regualrize loss according to data selection criteria
+            
             ### Naive data filtering ###
             # curr_loss = loss * params.world_size / loss_info["utterances"]
             # if curr_loss > (1 + 4 * (params.num_epochs - params.cur_epoch) / params.num_epochs) * params.loss_threshold:
@@ -1286,7 +1321,9 @@ def train_one_epoch(
             # loss *= loss_scale
 
             ### loss ratio ###
-            if o_loss is not None:
+            loss_ratio = "loss_ratio" in data_reg.keys()
+            if loss_ratio:
+                o_loss = data_reg["loss_ratio"]
                 curr_loss = loss * params.world_size / loss_info["utterances"]
                 o_loss = o_loss * params.world_size / loss_info["utterances"]
                 if (curr_loss / o_loss) > 1.017:
@@ -1546,9 +1583,43 @@ def run(rank, world_size, args, wb=None):
     )
 
     model.to(device)
+    
+    # prepare language model for lm ratio
+    rnn_lm = None
+    p13n_rnn_lm = None
+    if params.p13n_rnn_lm_exp_dir is not None:
+        
+        assert params.rnn_lm_exp_dir is not None
+
+        rnn_lm = RnnLmModel(
+            vocab_size=500,
+            embedding_dim=2048,
+            hidden_dim=2048,
+            num_layers=3,
+            tie_weights=False,
+        )
+        rnn_lm.load_state_dict(torch.load(params.rnn_lm_exp_dir)['model'])
+        rnn_lm.to(device)
+        rnn_lm.eval()
+
+        p13n_rnn_lm = RnnLmModel(
+            vocab_size=500,
+            embedding_dim=2048,
+            hidden_dim=2048,
+            num_layers=3,
+            tie_weights=False,
+        )
+        p13n_rnn_lm.load_state_dict(torch.load(params.p13n_rnn_lm_exp_dir)['model'])
+        p13n_rnn_lm.to(device)
+        p13n_rnn_lm.eval()
+
     if world_size > 1:
         logging.info("Using DDP")
         model = DDP(model, device_ids=[rank], find_unused_parameters=True)
+
+        if p13n_rnn_lm is not None:
+            p13n_rnn_lm = DDP(p13n_rnn_lm, device_ids=[rank])
+            rnn_lm = DDP(rnn_lm, device_ids=[rank])
     
     if params.multi_optim:
         logging.info("Using seperate optimizers over encoder, decoder ...")
@@ -1719,12 +1790,8 @@ def run(rank, world_size, args, wb=None):
         logging.info("Loading grad scaler state dict")
         scaler.load_state_dict(checkpoints["grad_scaler"])
 
-    # For weight reg
+    # For data selection
     to_online_model = None
-    l2_state_dict = {}
-    for name, p in model.module.named_parameters():
-        l2_state_dict[name] = p.data.detach().clone()
-    l2_state_dict_to = l2_state_dict
 
     for epoch in range(params.start_epoch, params.num_epochs + 1):
         if params.multi_optim:
@@ -1740,20 +1807,12 @@ def run(rank, world_size, args, wb=None):
 
         params.cur_epoch = epoch
 
-        if params.lwf:
-            online_model = copy.deepcopy(to_online_model)
-            to_online_model = copy.deepcopy(model)
-            if online_model is not None:
-                # online_model.eval()
-                for param in online_model.parameters():
-                    param.requires_grad = False
-        else:
-            online_model = None
-
-        if params.l2:
-            l2_state_dict = None if epoch == params.start_epoch else copy.deepcopy(l2_state_dict_to)
-            for name, p in model.module.named_parameters():
-                l2_state_dict_to[name] = p.data.detach().clone()
+        online_model = copy.deepcopy(to_online_model)
+        to_online_model = copy.deepcopy(model)
+        if online_model is not None:
+            # online_model.eval()
+            for param in online_model.parameters():
+                param.requires_grad = False
 
         train_one_epoch(
             params=params,
@@ -1770,7 +1829,8 @@ def run(rank, world_size, args, wb=None):
             rank=rank,
             wb=wb,
             online_model=online_model,
-            l2_state_dict=l2_state_dict,
+            rnn_lm=rnn_lm,
+            p13n_rnn_lm=p13n_rnn_lm,
         )
 
         if params.ema_alpha != 1:
@@ -1931,7 +1991,10 @@ def decode_dataset(
         texts = batch["supervisions"]["text"]
         cut_ids = [cut.id for cut in batch["supervisions"]["cut"]]
 
-        device = next(model.module.parameters()).device
+        if params.world_size > 1:
+            device = next(model.module.parameters()).device
+        else:
+            device = next(model.parameters()).device
         feature = batch["inputs"]
         assert feature.ndim == 2 or feature.ndim == 3
 
@@ -1950,13 +2013,22 @@ def decode_dataset(
             feature_lens = supervisions["num_frames"].to(device)
 
         hyps = []
-        encoder_out, encoder_out_lens = model.module.encoder(x=feature, x_lens=feature_lens)
-        hyp_tokens = modified_beam_search(
-            model=model.module,
-            encoder_out=encoder_out,
-            encoder_out_lens=encoder_out_lens,
-            beam=4,
-        )
+        if params.world_size > 1:
+            encoder_out, encoder_out_lens = model.module.encoder(x=feature, x_lens=feature_lens)
+            hyp_tokens = modified_beam_search(
+                model=model.module,
+                encoder_out=encoder_out,
+                encoder_out_lens=encoder_out_lens,
+                beam=4,
+            )
+        else:
+            encoder_out, encoder_out_lens = model.encoder(x=feature, x_lens=feature_lens)
+            hyp_tokens = modified_beam_search(
+                model=model,
+                encoder_out=encoder_out,
+                encoder_out_lens=encoder_out_lens,
+                beam=4,
+            )
         for hyp in sp.decode(hyp_tokens):
             hyps.append(hyp.split())
         hyps_dict = {f"beam_size_4": hyps}

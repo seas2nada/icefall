@@ -23,7 +23,7 @@ import torch
 import torch.nn as nn
 from encoder_interface import EncoderInterface
 
-from icefall.utils import add_sos
+from icefall.utils import add_sos, add_eos
 
 
 class Transducer(nn.Module):
@@ -86,7 +86,8 @@ class Transducer(nn.Module):
         am_scale: float = 0.0,
         lm_scale: float = 0.0,
         online_model = None,
-        l2_state_dict = None,
+        rnn_lm = None,
+        p13n_rnn_lm = None,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Args:
@@ -151,9 +152,38 @@ class Transducer(nn.Module):
         boundary[:, 2] = y_lens
         boundary[:, 3] = x_lens
 
+        # calculate lm ratio
+        with torch.no_grad():
+          if p13n_rnn_lm is not None:
+            logits, _ = rnn_lm.module.predict_batch(y, y_lens, sos_id=1, eos_id=1, blank_id=0, return_logits=True)
+            p13n_logits, _ = p13n_rnn_lm.module.predict_batch(y, y_lens, sos_id=1, eos_id=1, blank_id=0, return_logits=True)
+            logits = logits[:,:-1,:]
+            p13n_logits = p13n_logits[:,:-1,:]
+
+            y = y_padded
+            
+            scores = torch.zeros_like(y, dtype=torch.float, device=x.device) # initialize scores tensor for general LM
+            p13n_scores = torch.zeros_like(y, dtype=torch.float, device=x.device) # initialize scores tensor for p13n LM
+            lm_ratio =  torch.zeros(logits.size(0), device=x.device)
+            for batch in range(logits.size(0)):
+              scores[batch] = torch.gather(logits[batch], 1, y[batch].unsqueeze(1)).squeeze(1) # index along 
+              p13n_scores[batch] = torch.gather(p13n_logits[batch], 1, y[batch].unsqueeze(1)).squeeze(1) # index along 
+            
+              # temporal average score
+              lm_ratio[batch] = torch.mean(p13n_scores[batch, :y_lens[batch]] / scores[batch, :y_lens[batch]])
+
+            # normalize lm_ratio
+            max_weight = 3
+            eps = 1e-6
+            min_value = torch.min(lm_ratio)
+            max_value = torch.max(lm_ratio)
+            lm_ratio = max_weight * (lm_ratio - min_value) / (max_value - min_value)
+            lm_ratio += eps
+
         lm = self.simple_lm_proj(decoder_out)
         am = self.simple_am_proj(encoder_out)
 
+        reduction = "sum" if p13n_rnn_lm is None else "none"
         with torch.cuda.amp.autocast(enabled=False):
             simple_loss, (px_grad, py_grad) = k2.rnnt_loss_smoothed(
                 lm=lm.float(),
@@ -163,7 +193,7 @@ class Transducer(nn.Module):
                 lm_only_scale=lm_scale,
                 am_only_scale=am_scale,
                 boundary=boundary,
-                reduction="sum",
+                reduction=reduction,
                 return_grad=True,
             )
 
@@ -196,10 +226,18 @@ class Transducer(nn.Module):
                 ranges=ranges,
                 termination_symbol=blank_id,
                 boundary=boundary,
-                reduction="sum",
+                reduction=reduction,
             )
         
-        reg_loss = 0.0
+        if p13n_rnn_lm is not None:
+          simple_loss = simple_loss * lm_ratio
+          pruned_loss = pruned_loss * lm_ratio
+          simple_loss = simple_loss.sum()
+          pruned_loss = pruned_loss.sum()
+          return (simple_loss, pruned_loss, ctc_output, lm_ratio)
+        
+        simple_loss = simple_loss.sum()
+        pruned_loss = pruned_loss.sum()
         o_simple_loss, o_pruned_loss = None, None
         if online_model is not None:
           with torch.no_grad():
@@ -208,9 +246,6 @@ class Transducer(nn.Module):
 
             # decoder_out: [B, S + 1, decoder_dim]
             o_decoder_out = online_model.module.decoder(sos_y_padded)
-
-            # lm = self.simple_lm_proj(o_decoder_out)
-            # am = self.simple_am_proj(o_encoder_out)
 
             with torch.cuda.amp.autocast(enabled=False):
                 o_simple_loss, (px_grad, py_grad) = k2.rnnt_loss_smoothed(
@@ -252,20 +287,11 @@ class Transducer(nn.Module):
                   boundary=boundary,
                   reduction="sum",
               )
-        
-          # reg_loss = 0.1 * torch.nn.functional.kl_div(ctc_output.float().log_softmax(1), o_ctc_output.float().softmax(1), reduction="none").sum(1)
-          # reg_loss += 0.5 * torch.nn.functional.kl_div(logits.float().log_softmax(1), o_logits.float().softmax(1), reduction="none").sum(1)
-        elif l2_state_dict is not None:
-          n_grad_param = 0
-          for name, p in self.named_parameters():
-            if "encoder.encoders.feature_extractor" in name:
-              continue
-            if p.requires_grad:
-              reg_loss += torch.nn.functional.mse_loss(p.float(), l2_state_dict[name].float(), reduction='sum')
-              n_grad_param += 1
-          reg_loss = (reg_loss / n_grad_param).type_as(p)
 
-        return (simple_loss, pruned_loss, reg_loss, ctc_output, (o_simple_loss, o_pruned_loss))
+          return (simple_loss, pruned_loss, ctc_output, (o_simple_loss, o_pruned_loss))
+        
+        empty_return = dict()
+        return (simple_loss, pruned_loss, ctc_output, empty_return)
 
     def decode(
         self,

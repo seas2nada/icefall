@@ -36,7 +36,7 @@ bookid_list=$(cat /DB/l2arctic/list.txt)
 for bookid in $bookid_list; do
   individual=$bookid
 
-  expdir=./$model_dir/C_l2arctictts_${individual}_fz
+  expdir=./$model_dir/C_l2arctictts_${individual}_fz_useaug
   if [ $stage -le 0 ] && [ $stop_stage -ge 0 ]; then
     log "Stage 0: Train model"
     ./pruned_transducer_stateless_conformer/train.py \
@@ -92,20 +92,20 @@ for bookid in $bookid_list; do
         mv $expdir/$method/wer-summary-$individual-beam_size_4-epoch-30-avg-9-$method-beam-size-4-use-averaged-model.txt $expdir/$method/wer-$model_name-summary-$individual-beam_size_4-epoch-30-avg-9-$method-beam-size-4-use-averaged-model.txt
     done
 
-    for model_name in "epoch-30.pt"; do
-        expdir=pruned_transducer_stateless_conformer/C_0
-        for method in modified_beam_search; do
-            ./pruned_transducer_stateless_conformer/decode.py \
-            --test-dataset $test_dataset \
-            --decode-individual $individual \
-            --gen-pseudo-label False \
-            --model-name $model_name \
-            --exp-dir $expdir \
-            --num-buckets 2 \
-            --max-duration 400 \
-            --decoding-method $method \
-            --max-sym-per-frame 1
-        done
-    done
+    # for model_name in "epoch-30.pt"; do
+    #     expdir=pruned_transducer_stateless_conformer/C_0
+    #     for method in modified_beam_search; do
+    #         ./pruned_transducer_stateless_conformer/decode.py \
+    #         --test-dataset $test_dataset \
+    #         --decode-individual $individual \
+    #         --gen-pseudo-label False \
+    #         --model-name $model_name \
+    #         --exp-dir $expdir \
+    #         --num-buckets 2 \
+    #         --max-duration 400 \
+    #         --decoding-method $method \
+    #         --max-sym-per-frame 1
+    #     done
+    # done
 fi
 done
