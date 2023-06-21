@@ -71,7 +71,7 @@ for bookid in $bookid_list; do
             --ema-alpha ${EMA} \
             --layer-average-start-idx -1 \
             --freeze-lower-encoder-layers $flel \
-            --freeze-decoder-embedding-layers False \
+            --freeze-decoder-embedding-layers $fz_decemb \
             --freeze-encoder $fz_enc \
             --freeze-decoder $fz_dec \
             --freeze-joiner False \

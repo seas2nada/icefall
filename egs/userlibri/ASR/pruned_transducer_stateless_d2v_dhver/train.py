@@ -1807,12 +1807,15 @@ def run(rank, world_size, args, wb=None):
 
         params.cur_epoch = epoch
 
-        online_model = copy.deepcopy(to_online_model)
-        to_online_model = copy.deepcopy(model)
-        if online_model is not None:
-            # online_model.eval()
-            for param in online_model.parameters():
-                param.requires_grad = False
+        if rnn_lm is None:
+            online_model = copy.deepcopy(to_online_model)
+            to_online_model = copy.deepcopy(model)
+            if online_model is not None:
+                # online_model.eval()
+                for param in online_model.parameters():
+                    param.requires_grad = False
+        else:
+            online_model = None
 
         train_one_epoch(
             params=params,
