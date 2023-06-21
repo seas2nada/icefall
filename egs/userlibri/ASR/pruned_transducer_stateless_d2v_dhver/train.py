@@ -280,7 +280,7 @@ def add_rep_arguments(parser: argparse.ArgumentParser):
     )
 
     parser.add_argument(
-        "--rnn-lm-exp-dir",
+        "--gen-rnn-lm-exp-dir",
         type=str,
         default=None,
     )
@@ -1589,7 +1589,7 @@ def run(rank, world_size, args, wb=None):
     p13n_rnn_lm = None
     if params.p13n_rnn_lm_exp_dir is not None:
         
-        assert params.rnn_lm_exp_dir is not None
+        assert params.gen_rnn_lm_exp_dir is not None
 
         rnn_lm = RnnLmModel(
             vocab_size=500,
@@ -1598,7 +1598,7 @@ def run(rank, world_size, args, wb=None):
             num_layers=3,
             tie_weights=False,
         )
-        rnn_lm.load_state_dict(torch.load(params.rnn_lm_exp_dir)['model'])
+        rnn_lm.load_state_dict(torch.load(params.gen_rnn_lm_exp_dir)['model'])
         rnn_lm.to(device)
         rnn_lm.eval()
 

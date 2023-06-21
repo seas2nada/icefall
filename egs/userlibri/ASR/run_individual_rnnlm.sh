@@ -77,7 +77,7 @@ for bookid in $bookid_list; do
             --freeze-joiner False \
             --decode-interval 9999999 \
             --enable-musan False \
-            --rnn-lm-exp-dir rnnlm_model/epoch-30.pt \
+            --gen-rnn-lm-exp-dir rnnlm_model/epoch-30.pt \
             --p13n-rnn-lm-exp-dir p13n_rnnlm_model/exp_${sid}/epoch-39.pt
     
     mv $expdir/epoch-$max_epoch.pt $expdir/last-epoch.pt
