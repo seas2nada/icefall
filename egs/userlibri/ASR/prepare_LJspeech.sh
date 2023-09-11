@@ -119,16 +119,16 @@ if [ $stage -le 1 ] && [ $stop_stage -ge 1 ]; then
   fi
 fi
 
-if [ $stage -le 2 ] && [ $stop_stage -ge 2 ]; then
-  log "Stage 2: Prepare musan manifest"
-  # We assume that you have downloaded the musan corpus
-  # to data/musan
-  mkdir -p data/manifests
-  if [ ! -e data/manifests/.musan.done ]; then
-    lhotse prepare musan $dl_dir/musan data/manifests
-    touch data/manifests/.musan.done
-  fi
-fi
+# if [ $stage -le 2 ] && [ $stop_stage -ge 2 ]; then
+#   log "Stage 2: Prepare musan manifest"
+#   # We assume that you have downloaded the musan corpus
+#   # to data/musan
+#   mkdir -p data/manifests
+#   if [ ! -e data/manifests/.musan.done ]; then
+#     lhotse prepare musan $dl_dir/musan data/manifests
+#     touch data/manifests/.musan.done
+#   fi
+# fi
 
 if [ $stage -le 3 ] && [ $stop_stage -ge 3 ]; then
   log "Stage 3: Compute fbank for LJSpeech"
@@ -148,11 +148,11 @@ if [ $stage -le 3 ] && [ $stop_stage -ge 3 ]; then
   fi
 fi
 
-if [ $stage -le 4 ] && [ $stop_stage -ge 4 ]; then
-  log "Stage 4: Compute fbank for musan"
-  mkdir -p data/fbank
-  if [ ! -e data/fbank/.musan.done ]; then
-    ./local/compute_fbank_musan.py
-    touch data/fbank/.musan.done
-  fi
-fi
+# if [ $stage -le 4 ] && [ $stop_stage -ge 4 ]; then
+#   log "Stage 4: Compute fbank for musan"
+#   mkdir -p data/fbank
+#   if [ ! -e data/fbank/.musan.done ]; then
+#     ./local/compute_fbank_musan.py
+#     touch data/fbank/.musan.done
+#   fi
+# fi

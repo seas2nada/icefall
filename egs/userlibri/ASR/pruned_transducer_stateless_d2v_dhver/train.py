@@ -290,6 +290,13 @@ def add_rep_arguments(parser: argparse.ArgumentParser):
         type=str,
         default=None,
     )
+
+    parser.add_argument(
+        "--lrdf",
+        type=str2bool,
+        default=False,
+        help="loss ratio based data filtering",
+    )
         
 
 def add_model_arguments(parser: argparse.ArgumentParser):
@@ -942,6 +949,7 @@ def compute_loss(
     online_model = None,
     rnn_lm = None,
     p13n_rnn_lm = None,
+    only_grads = False,
 ) -> Tuple[Tensor, MetricsTracker]:
     """
     Compute transducer loss given the model and its inputs.
@@ -1021,6 +1029,20 @@ def compute_loss(
     token_ids = sp.encode(texts, out_type=int)
     y = k2.RaggedTensor(token_ids).to(device)
 
+    if only_grads:
+        return model(
+            x=feature,
+            x_lens=feature_lens,
+            y=y,
+            prune_range=params.prune_range,
+            am_scale=params.am_scale,
+            lm_scale=params.lm_scale,
+            online_model=online_model if is_training else None,
+            rnn_lm=rnn_lm if is_training else None,
+            p13n_rnn_lm=p13n_rnn_lm if is_training else None,
+            only_grads = True
+        )
+
     with torch.set_grad_enabled(is_training):
         simple_loss, pruned_loss, ctc_output, data_reg = model(
             x=feature,
@@ -1051,18 +1073,19 @@ def compute_loss(
         loss = simple_loss_scale * simple_loss + pruned_loss_scale * pruned_loss
         
         reduction = "sum"
-        if isinstance(data_reg, tuple):
-            o_losses = data_reg
-            o_loss = simple_loss_scale * o_losses[0] + pruned_loss_scale * o_losses[1]
-            o_loss = o_loss.detach().cpu().item()
-            data_reg = {"loss_ratio" : o_loss}
-        elif isinstance(data_reg, torch.Tensor):
-            reduction = "none"
-            lm_ratio = data_reg
-            data_reg = {"lm_ratio" : lm_ratio}
-        else:
-            if is_training:
-                raise NotImplementedError("undefined data regularization method")
+        if data_reg is not None:
+            if isinstance(data_reg, tuple):
+                o_losses = data_reg
+                o_loss = simple_loss_scale * o_losses[0] + pruned_loss_scale * o_losses[1]
+                o_loss = o_loss.detach().cpu().item()
+                data_reg = {"loss_ratio" : o_loss}
+            elif isinstance(data_reg, torch.Tensor):
+                reduction = "none"
+                lm_ratio = data_reg
+                data_reg = {"lm_ratio" : lm_ratio}
+            else:
+                if is_training:
+                    raise NotImplementedError("undefined data regularization method")
     
     info = MetricsTracker()
     
@@ -1223,6 +1246,63 @@ def compute_validation_loss(
 
     return tot_loss
 
+def compute_gradients(params: AttributeDict,
+    model: Union[nn.Module, DDP],
+    optimizer: torch.optim.Optimizer or [torch.optim.Optimizer, torch.optim.Optimizer],
+    scheduler: LRSchedulerType or [LRSchedulerType, LRSchedulerType],
+    sp: spm.SentencePieceProcessor,
+    train_dl: torch.utils.data.DataLoader,
+    valid_dl: torch.utils.data.DataLoader,
+    scaler: GradScaler,
+    model_avg: Optional[nn.Module] = None,
+    tb_writer: Optional[SummaryWriter] = None,
+    world_size: int = 1,
+    rank: int = 0,
+    wb = None,
+    online_model = None,
+    rnn_lm = None,
+    p13n_rnn_lm = None,):
+
+    for batch_idx, batch in enumerate(train_dl):
+        with torch.cuda.amp.autocast(enabled=params.use_fp16):
+            batch_l0_grads = compute_loss(
+                params=params,
+                model=model,
+                sp=sp,
+                batch=batch,
+                is_training=True,
+                decode=True if batch_idx % params.decode_interval == 0 else False,
+                online_model=online_model,
+                rnn_lm=rnn_lm,
+                p13n_rnn_lm=p13n_rnn_lm,
+                only_grads=True
+            )
+
+            if batch_idx == 0:
+                l0_grads = batch_l0_grads
+            else:
+                l0_grads = torch.cat((l0_grads, batch_l0_grads), dim=0)
+
+    for batch_idx, batch in enumerate(valid_dl):
+        with torch.cuda.amp.autocast(enabled=params.use_fp16):
+            val_batch_l0_grads = compute_loss(
+                params=params,
+                model=model,
+                sp=sp,
+                batch=batch,
+                is_training=True,
+                decode = True if batch_idx % params.decode_interval == 0 else False,
+                online_model = online_model,
+                rnn_lm = rnn_lm,
+                p13n_rnn_lm = p13n_rnn_lm,
+                only_grads = True
+            )
+            if batch_idx == 0:
+                sum_val_grad = val_batch_l0_grads
+            else:
+                sum_val_grad = torch.cat((sum_val_grad, val_batch_l0_grads), dim=0)
+                
+    return l0_grads, sum_val_grad
 
 def train_one_epoch(
     params: AttributeDict,
@@ -1241,6 +1321,7 @@ def train_one_epoch(
     online_model = None,
     rnn_lm = None,
     p13n_rnn_lm = None,
+    filter_indices = None,
 ) -> None:
     """Train the model for one epoch.
 
@@ -1284,6 +1365,9 @@ def train_one_epoch(
         scheduler_enc, scheduler_dec = scheduler[0], scheduler[1]
 
     for batch_idx, batch in enumerate(train_dl):
+        if batch_idx in filter_indices:
+            continue
+
         if batch_idx < cur_batch_idx:
             continue
         cur_batch_idx = batch_idx
@@ -1306,33 +1390,20 @@ def train_one_epoch(
                 )
             loss_info.reduce(loss.device)
 
-            # Regualrize loss according to data selection criteria
-            
-            ### Naive data filtering ###
-            # curr_loss = loss * params.world_size / loss_info["utterances"]
-            # if curr_loss > (1 + 4 * (params.num_epochs - params.cur_epoch) / params.num_epochs) * params.loss_threshold:
-            #     logging.info(
-            #         f"Current bath loss: {curr_loss}, "
-            #         f"Loss threshold {(1 + 4 * params.cur_epoch / params.num_epochs) * params.loss_threshold}, "
-            #         "Skip current batch for training"
-            #         )
-            #     loss *= 1e-6
-            # loss_scale = max(1, params.loss_threshold / loss.detach().cpu())
-            # loss *= loss_scale
-
-            ### loss ratio ###
-            loss_ratio = "loss_ratio" in data_reg.keys()
-            if loss_ratio:
-                o_loss = data_reg["loss_ratio"]
-                curr_loss = loss * params.world_size / loss_info["utterances"]
-                o_loss = o_loss * params.world_size / loss_info["utterances"]
-                if (curr_loss / o_loss) > 1.017:
-                    logging.info(
-                        f"Current bath loss: {curr_loss}, "
-                        f"Previous batch loss {o_loss}, "
-                        "Skip current batch for training"
-                    )
-                    loss *= 1e-6
+            # ### loss ratio ###
+            # if data_reg is not None:
+            #     loss_ratio = "loss_ratio" in data_reg.keys()
+            #     if loss_ratio:
+            #         o_loss = data_reg["loss_ratio"]
+            #         curr_loss = loss * params.world_size / loss_info["utterances"]
+            #         o_loss = o_loss * params.world_size / loss_info["utterances"]
+            #         if (curr_loss / o_loss) > 1.017:
+            #             logging.info(
+            #                 f"Current bath loss: {curr_loss}, "
+            #                 f"Previous batch loss {o_loss}, "
+            #                 "Skip current batch for training"
+            #             )
+            #             loss *= 1e-6
 
             numel = params.world_size / (params.accum_grads * loss_info["utterances"])
             loss *= numel ## normalize loss over utts(batch size)
@@ -1414,14 +1485,12 @@ def train_one_epoch(
             if cur_grad_scale < 0.01:
                 logging.warning(f"Grad scale is small: {cur_grad_scale}")
             if cur_grad_scale < 1.0e-05:
-                wb.log({"valid/loss": 10000})
                 raise RuntimeError(
                     f"grad_scale is too small, exiting: {cur_grad_scale}"
                 )
 
-        if params.batch_idx_train > 4000 and loss > 300:
-            wb.log({"valid/loss": 10000})
-            raise RunteimError(
+        if params.batch_idx_train > 4000 and loss > 500:
+            raise RuntimeError(
                     f"divergence... exiting: loss={loss}"
                 )
 
@@ -1483,7 +1552,6 @@ def train_one_epoch(
                 wb.log({"train/pruned_loss": loss_info["pruned_loss"]*numel})
                 wb.log({"train/ctc_loss": loss_info["ctc_loss"]*numel})
 
-#if batch_idx % params.valid_interval == 0 and not params.print_diagnostics:
     logging.info("Computing validation loss")
     valid_info = compute_validation_loss(
         params=params,
@@ -1794,6 +1862,18 @@ def run(rank, world_size, args, wb=None):
     to_online_model = None
 
     for epoch in range(params.start_epoch, params.num_epochs + 1):
+        # print(list(train_dl.sampler)[0])
+        # for batch_idx, batch in enumerate(train_dl):
+        #     print(batch_idx, len(batch['inputs']))
+        #     batch['forward'] = [1, 3, 5]
+        
+        # train_dl.sampler.set_epoch(20-1)
+        # print(list(train_dl.sampler)[0])
+        # print(list(train_dl.sampler)[100])
+        # for batch_idx, batch in enumerate(train_dl):
+        #     print(batch['forward'])
+        #     exit()
+
         if params.multi_optim:
             scheduler_enc.step_epoch(epoch - 1)
             scheduler_dec.step_epoch(epoch - 1)
@@ -1807,7 +1887,7 @@ def run(rank, world_size, args, wb=None):
 
         params.cur_epoch = epoch
 
-        if rnn_lm is None:
+        if rnn_lm is None and params.lrdf:
             online_model = copy.deepcopy(to_online_model)
             to_online_model = copy.deepcopy(model)
             if online_model is not None:
@@ -1816,6 +1896,34 @@ def run(rank, world_size, args, wb=None):
                     param.requires_grad = False
         else:
             online_model = None
+
+        trn_gradients, sum_val_grad = compute_gradients(
+            params=params,
+            model=model,
+            model_avg=model_avg,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            sp=sp,
+            train_dl=train_dl,
+            valid_dl=valid_dl,
+            scaler=scaler,
+            tb_writer=tb_writer,
+            world_size=world_size,
+            rank=rank,
+            wb=wb,
+            online_model=online_model,
+            rnn_lm=rnn_lm,
+            p13n_rnn_lm=p13n_rnn_lm,
+        )
+        
+        cos_sims = torch.zeros(len(trn_gradients)).to(device)
+        sum_val_grad = sum_val_grad.mean(dim=0).view(-1) * 1000
+        for i, trn_gradient in enumerate(trn_gradients):
+            trn_gradient = trn_gradient * 1000
+            cos_sims[i] += torch.nn.functional.cosine_similarity(trn_gradient, sum_val_grad, dim=0)
+        
+        filter_th = 0.9
+        filter_indices = cos_sims.sort(descending=True)[1][int(len(cos_sims) * filter_th):]
 
         train_one_epoch(
             params=params,
@@ -1834,6 +1942,7 @@ def run(rank, world_size, args, wb=None):
             online_model=online_model,
             rnn_lm=rnn_lm,
             p13n_rnn_lm=p13n_rnn_lm,
+            filter_indices=filter_indices,
         )
 
         if params.ema_alpha != 1:
@@ -1870,7 +1979,6 @@ def run(rank, world_size, args, wb=None):
     if world_size > 1:
         torch.distributed.barrier()
         cleanup_dist()
-
 
 def display_and_save_batch(
     batch: dict,

@@ -30,17 +30,17 @@ EMA=0.099
 flel=9
 fz_enc=False
 fz_dec=False
-fz_decemb=True
+fz_decemb=False
 ctc_scale=0.0
 max_epoch=20
-# bookid_list=$(cat /DB/UserLibri/userlibri_test_other_tts/list.txt)
-bookid_list=$(cat /DB/UserLibri/userlibri_test_clean_tts/list.txt)
+bookid_list=$(cat /DB/UserLibri/userlibri_test_other_tts/list.txt)
+# bookid_list=$(cat /DB/UserLibri/userlibri_test_clean_tts/list.txt)
 for bookid in $bookid_list; do
   sid=$(echo $bookid | awk -F 'tts' '{print $1}')
   individual="speaker-$sid"
 
   # expdir=./$model_dir/M_${individual}_book-${bookid}_EMA-${EMA}_fz-enc$fz_enc-lowenc$flel-dec$fz_dec-decemb$fz_decemb-ctc${ctc_scale}
-  expdir=./$model_dir/M_${individual}_book-${bookid}_test
+  expdir=./$model_dir/M_${individual}_book-${bookid}_GM_test
   pn=UserLibri_iter0
   if [ $stage -le 0 ] && [ $stop_stage -ge 0 ]; then
     log "Stage 0: Train model"
@@ -97,36 +97,9 @@ for bookid in $bookid_list; do
   if [ $stage -le 1 ] && [ $stop_stage -ge 1 ]; then
     log "Stage 1: Decoding"
     # modified_beam_search, greedy_search, ctc_greedy_search
-    for model_name in "best-valid-wer.pt" "last-epoch.pt"; do
-      # expdir=./$model_dir/M_${individual}_book-${bookid}_EMA499_fz-lowenc9-dec
-      # expdir=./$model_dir/M_0
-      # model_name="libri_prefinetuned.pt"
-      # test_dataset="librispeech"
-      # ./pruned_transducer_stateless_d2v_dhver/decode_rnnlm.py \
-      # --test-dataset $test_dataset \
-      # --decode-individual $individual \
-      # --gen-pseudo-label False \
-      # --input-strategy AudioSamples \
-      # --enable-spec-aug False \
-      # --additional-block True \
-      # --model-name $model_name \
-      # --exp-dir $expdir \
-      # --encoder-type d2v \
-      # --encoder-dim 768 \
-      # --decoder-dim 768 \
-      # --joiner-dim 768 \
-      # --max-duration 600 \
-      # --decoding-method modified_beam_search_rnnlm_shallow_fusion \
-      # --beam 4 \
-      # --rnn-lm-scale 0.3 \
-      # --rnn-lm-exp-dir rnnlm_model \
-      # --rnn-lm-epoch 99 \
-      # --rnn-lm-avg 1 \
-      # --rnn-lm-num-layers 3 \
-      # --rnn-lm-tie-weights 1
+    individual="${sid}tts_test"
 
-      # expdir=./$model_dir/M_0
-      # model_name="libri_prefinetuned.pt"
+    for model_name in "last-epoch.pt" "best-valid-wer.pt"; do
       for method in modified_beam_search; do
           ./pruned_transducer_stateless_d2v_dhver/decode.py \
           --test-dataset $test_dataset \
@@ -148,26 +121,26 @@ for bookid in $bookid_list; do
       done
       mv $expdir/$method/wer-summary-$individual-beam_size_4-epoch-30-avg-9-$method-beam-size-4-use-averaged-model.txt $expdir/$method/wer-$model_name-summary-$individual-beam_size_4-epoch-30-avg-9-$method-beam-size-4-use-averaged-model.txt
     done
-    expdir=./$model_dir/M_0
-    model_name="libri_prefinetuned.pt"
-    for method in modified_beam_search; do
-        ./pruned_transducer_stateless_d2v_dhver/decode.py \
-        --test-dataset $test_dataset \
-        --decode-individual $individual \
-        --gen-pseudo-label False \
-        --input-strategy AudioSamples \
-        --enable-spec-aug False \
-        --additional-block True \
-        --model-name $model_name \
-        --exp-dir $expdir \
-        --num-buckets 2 \
-        --max-duration 400 \
-        --decoding-method $method \
-        --max-sym-per-frame 1 \
-        --encoder-type d2v \
-        --encoder-dim 768 \
-        --decoder-dim 768 \
-        --joiner-dim 768
-    done
+    # expdir=./$model_dir/M_0
+    # model_name="libri_prefinetuned.pt"
+    # for method in modified_beam_search; do
+    #     ./pruned_transducer_stateless_d2v_dhver/decode.py \
+    #     --test-dataset $test_dataset \
+    #     --decode-individual $individual \
+    #     --gen-pseudo-label False \
+    #     --input-strategy AudioSamples \
+    #     --enable-spec-aug False \
+    #     --additional-block True \
+    #     --model-name $model_name \
+    #     --exp-dir $expdir \
+    #     --num-buckets 2 \
+    #     --max-duration 400 \
+    #     --decoding-method $method \
+    #     --max-sym-per-frame 1 \
+    #     --encoder-type d2v \
+    #     --encoder-dim 768 \
+    #     --decoder-dim 768 \
+    #     --joiner-dim 768
+    # done
   fi
 done

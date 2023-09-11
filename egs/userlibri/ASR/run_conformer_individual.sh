@@ -78,7 +78,10 @@ for bookid in $bookid_list; do
   if [ $stage -le 1 ] && [ $stop_stage -ge 1 ]; then
     log "Stage 1: Decoding"
     # modified_beam_search, greedy_search, ctc_greedy_search
-    for model_name in "best-train-loss.pt" "last-epoch.pt"; do
+    expdir=./$model_dir/C_${individual}_book-${bookid}_EMA-1_fz-encFalse-lowenc0-decFalse-decembFalse-lwfFalse_l2False
+    individual="${sid}tts_test"
+
+    for model_name in "best-train-loss.pt"; do
         for method in modified_beam_search; do
             ./pruned_transducer_stateless_conformer/decode.py \
             --test-dataset $test_dataset \

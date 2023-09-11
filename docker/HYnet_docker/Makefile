@@ -46,6 +46,7 @@ run:
 		-p $(ARG_PORT_TENSORBOARD):6006 \
 		-v $(ARG_WORKSPACE_HOST):$(ARG_WORKSPACE_CONTAINER) \
 		-v /DB:/DB \
+		-v /exps:/exps \
 		-v /etc/timezone:/etc/timezone \
 		-v /etc/localtime:/etc/localtime \
 		--gpus all \

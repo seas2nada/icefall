@@ -77,17 +77,24 @@ def prepare_userlibri(
                 recordings = []
                 supervisions = []
                 part_path = corpus_dir / s_or_b / part
+                # part_path = /DB/UserLibri/userlibri_testset_test_clean_randtts/2300tts_test
                 
-                text_file = part + "_lm_train.txt"
-                trans_path = corpus_dir_str + "/" + gen_dir_str + "/" + text_file
-                trans_parent = corpus_dir_str + "/" + gen_dir_str
+                text_files_ = os.listdir(part_path)
+                text_files = []
+                for text_file in text_files_:
+                    if 'txt' in text_file:
+                        text_files.append(text_file)
                 futures = []
 
                 alignments = {}
-                with open(trans_path) as f:
-                    for line in f:
+                for text_file in text_files:
+                    with open(part_path / Path(text_file)) as f:
+                        text = f.readlines()
+                        text = text[0]
+                        recording_id = text_file.rstrip('.txt')
+
                         futures.append(
-                            ex.submit(parse_utterance, part_path, line, alignments)
+                            ex.submit(parse_utterance, part_path, recording_id, text, alignments)
                         )
 
                 for future in tqdm(futures, desc="Processing", leave=False):
@@ -121,10 +128,10 @@ def prepare_userlibri(
 
 def parse_utterance(
     dataset_split_path: Path,
-    line: str,
+    recording_id: str,
+    text: str,
     alignments: Dict[str, List[AlignmentItem]],
 ) -> Optional[Tuple[Recording, SupervisionSegment]]:
-    recording_id, text = line.strip().split(maxsplit=1)
     # Create the Recording first
     audio_path = (
         dataset_split_path

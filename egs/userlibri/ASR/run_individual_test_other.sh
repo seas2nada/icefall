@@ -57,7 +57,7 @@ for bookid in $bookid_list; do
             --enable-spec-aug False \
             --multi-optim True \
             --start-epoch 1 \
-            --world-size 4 \
+            --world-size 1 \
             --num-epochs $max_epoch \
             --exp-dir $expdir \
             --num-buckets 2 \
@@ -148,26 +148,26 @@ for bookid in $bookid_list; do
       done
       mv $expdir/$method/wer-summary-$individual-beam_size_4-epoch-30-avg-9-$method-beam-size-4-use-averaged-model.txt $expdir/$method/wer-$model_name-summary-$individual-beam_size_4-epoch-30-avg-9-$method-beam-size-4-use-averaged-model.txt
     done
-    expdir=./$model_dir/M_0
-    model_name="libri_prefinetuned.pt"
-    for method in modified_beam_search; do
-        ./pruned_transducer_stateless_d2v_dhver/decode.py \
-        --test-dataset $test_dataset \
-        --decode-individual $individual \
-        --gen-pseudo-label False \
-        --input-strategy AudioSamples \
-        --enable-spec-aug False \
-        --additional-block True \
-        --model-name $model_name \
-        --exp-dir $expdir \
-        --num-buckets 2 \
-        --max-duration 400 \
-        --decoding-method $method \
-        --max-sym-per-frame 1 \
-        --encoder-type d2v \
-        --encoder-dim 768 \
-        --decoder-dim 768 \
-        --joiner-dim 768
-    done
+    # expdir=./$model_dir/M_0
+    # model_name="libri_prefinetuned.pt"
+    # for method in modified_beam_search; do
+    #     ./pruned_transducer_stateless_d2v_dhver/decode.py \
+    #     --test-dataset $test_dataset \
+    #     --decode-individual $individual \
+    #     --gen-pseudo-label False \
+    #     --input-strategy AudioSamples \
+    #     --enable-spec-aug False \
+    #     --additional-block True \
+    #     --model-name $model_name \
+    #     --exp-dir $expdir \
+    #     --num-buckets 2 \
+    #     --max-duration 400 \
+    #     --decoding-method $method \
+    #     --max-sym-per-frame 1 \
+    #     --encoder-type d2v \
+    #     --encoder-dim 768 \
+    #     --decoder-dim 768 \
+    #     --joiner-dim 768
+    # done
   fi
 done
