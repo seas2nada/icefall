@@ -31,7 +31,7 @@ fz_decemb=True
 ctc_scale=0.0
 max_epoch=20
 
-expdir=$model_dir/M_0_to_LJttsdomain_fromLJvits_fz_full
+expdir=$model_dir/M_0_to_LJttsdomain_GM0.999
 if [ $stage -le 0 ] && [ $stop_stage -ge 0 ]; then
     log "Stage 0: Train model"
     ./pruned_transducer_stateless_d2v_dhver/train.py \

@@ -33,8 +33,9 @@ fz_dec=False
 fz_decemb=False
 ctc_scale=0.0
 max_epoch=20
-bookid_list=$(cat /DB/UserLibri/userlibri_test_other_tts/list.txt)
-# bookid_list=$(cat /DB/UserLibri/userlibri_test_clean_tts/list.txt)
+# bookid_list=$(cat ./list.txt)
+# # bookid_list=$(cat /DB/UserLibri/userlibri_test_other_tts/list.txt)
+bookid_list=$(cat /DB/UserLibri/userlibri_test_clean_tts/list.txt)
 for bookid in $bookid_list; do
   sid=$(echo $bookid | awk -F 'tts' '{print $1}')
   individual="speaker-$sid"
@@ -82,7 +83,7 @@ for bookid in $bookid_list; do
             --freeze-decoder $fz_dec \
             --freeze-joiner False \
             --decode-interval 9999999 \
-            --enable-musan False
+            --enable-musan True
     
     mv $expdir/epoch-$max_epoch.pt $expdir/last-epoch.pt
     rm -rf $expdir/epoch-*
@@ -97,7 +98,7 @@ for bookid in $bookid_list; do
   if [ $stage -le 1 ] && [ $stop_stage -ge 1 ]; then
     log "Stage 1: Decoding"
     # modified_beam_search, greedy_search, ctc_greedy_search
-    individual="${sid}tts_test"
+    # individual="${sid}tts_test"
 
     for model_name in "last-epoch.pt" "best-valid-wer.pt"; do
       for method in modified_beam_search; do

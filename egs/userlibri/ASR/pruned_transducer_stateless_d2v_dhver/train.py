@@ -1365,7 +1365,7 @@ def train_one_epoch(
         scheduler_enc, scheduler_dec = scheduler[0], scheduler[1]
 
     for batch_idx, batch in enumerate(train_dl):
-        if batch_idx in filter_indices:
+        if filter_indices is not None and batch_idx in filter_indices:
             continue
 
         if batch_idx < cur_batch_idx:
@@ -1897,33 +1897,36 @@ def run(rank, world_size, args, wb=None):
         else:
             online_model = None
 
-        trn_gradients, sum_val_grad = compute_gradients(
-            params=params,
-            model=model,
-            model_avg=model_avg,
-            optimizer=optimizer,
-            scheduler=scheduler,
-            sp=sp,
-            train_dl=train_dl,
-            valid_dl=valid_dl,
-            scaler=scaler,
-            tb_writer=tb_writer,
-            world_size=world_size,
-            rank=rank,
-            wb=wb,
-            online_model=online_model,
-            rnn_lm=rnn_lm,
-            p13n_rnn_lm=p13n_rnn_lm,
-        )
-        
-        cos_sims = torch.zeros(len(trn_gradients)).to(device)
-        sum_val_grad = sum_val_grad.mean(dim=0).view(-1) * 1000
-        for i, trn_gradient in enumerate(trn_gradients):
-            trn_gradient = trn_gradient * 1000
-            cos_sims[i] += torch.nn.functional.cosine_similarity(trn_gradient, sum_val_grad, dim=0)
-        
-        filter_th = 0.9
-        filter_indices = cos_sims.sort(descending=True)[1][int(len(cos_sims) * filter_th):]
+        if epoch % 5 == 0:
+            trn_gradients, sum_val_grad = compute_gradients(
+                params=params,
+                model=model,
+                model_avg=model_avg,
+                optimizer=optimizer,
+                scheduler=scheduler,
+                sp=sp,
+                train_dl=train_dl,
+                valid_dl=valid_dl,
+                scaler=scaler,
+                tb_writer=tb_writer,
+                world_size=world_size,
+                rank=rank,
+                wb=wb,
+                online_model=online_model,
+                rnn_lm=rnn_lm,
+                p13n_rnn_lm=p13n_rnn_lm,
+            )
+            
+            cos_sims = torch.zeros(len(trn_gradients)).to(device)
+            sum_val_grad = sum_val_grad.mean(dim=0).view(-1) * 1000
+            for i, trn_gradient in enumerate(trn_gradients):
+                trn_gradient = trn_gradient * 1000
+                cos_sims[i] += torch.nn.functional.cosine_similarity(trn_gradient, sum_val_grad, dim=0)
+            
+                filter_th = 0.999
+                filter_indices = cos_sims.sort(descending=True)[1][int(len(cos_sims) * filter_th):]
+        else:
+            filter_indices = None
 
         train_one_epoch(
             params=params,
