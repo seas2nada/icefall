@@ -38,7 +38,7 @@ stop_stage=100
 #     - noise
 #     - speech
 dl_dir=/DB/
-gen_dir=refined_lm_data_with_fname
+gen_dir=userlibri_test_clean_tts
 
 . shared/parse_options.sh || exit 1
 

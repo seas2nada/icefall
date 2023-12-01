@@ -18,7 +18,6 @@ from lhotse.utils import (
     Pathlike,
     is_module_available,
     safe_extract,
-    urlretrieve_progress,
 )
 
 # LIBRISPEECH_ALIGNMENTS_URL = (

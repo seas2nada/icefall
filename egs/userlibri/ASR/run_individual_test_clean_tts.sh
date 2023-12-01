@@ -18,8 +18,8 @@ log() {
   echo -e "$(date '+%Y-%m-%d %H:%M:%S') (${fname}:${BASH_LINENO[0]}:${FUNCNAME[1]}) $*"
 }
 
-model_dir=pruned_transducer_stateless_d2v_dhver
-ft_model=./$model_dir/M_0/libri_prefinetuned.pt
+model_dir=pruned_transducer_stateless_d2v
+ft_model=./$model_dir/models/libri_prefinetuned.pt
 # datset: librispeech, ljspeech, userlibri
 train_dataset="userlibri"
 test_dataset="userlibri"
@@ -30,8 +30,8 @@ fz_dec=False
 fz_decemb=True
 ctc_scale=0.0
 max_epoch=20
-# bookid_list=$(cat /DB/UserLibri/userlibri_test_clean_tts/list.txt)
-bookid_list=$(cat ./list.txt)
+bookid_list=$(cat /DB/UserLibri/userlibri_test_clean_tts/list.txt)
+
 for bookid in $bookid_list; do
   sid=$(echo $bookid | awk -F 'tts' '{print $1}')
   individual="speaker-$sid"
