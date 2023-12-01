@@ -86,9 +86,6 @@ class Transducer(nn.Module):
         am_scale: float = 0.0,
         lm_scale: float = 0.0,
         online_model = None,
-        rnn_lm = None,
-        p13n_rnn_lm = None,
-        only_grads = False,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Args:
@@ -229,18 +226,6 @@ class Transducer(nn.Module):
                 boundary=boundary,
                 reduction=reduction,
             )
-        
-        if p13n_rnn_lm is not None:
-          simple_loss = simple_loss * lm_ratio
-          pruned_loss = pruned_loss * lm_ratio
-          simple_loss = simple_loss.sum()
-          pruned_loss = pruned_loss.sum()
-          return (simple_loss, pruned_loss, ctc_output, lm_ratio)
-
-        if only_grads:
-          loss = pruned_loss + simple_loss
-          l0_grads = torch.autograd.grad(loss, logits)[0].mean(dim=0).mean(dim=0).mean(dim=0).view(1, -1)
-          return l0_grads
         
         if online_model is not None:
           o_simple_loss, o_pruned_loss = None, None

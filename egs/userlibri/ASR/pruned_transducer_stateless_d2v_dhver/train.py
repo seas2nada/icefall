@@ -1246,64 +1246,6 @@ def compute_validation_loss(
 
     return tot_loss
 
-def compute_gradients(params: AttributeDict,
-    model: Union[nn.Module, DDP],
-    optimizer: torch.optim.Optimizer or [torch.optim.Optimizer, torch.optim.Optimizer],
-    scheduler: LRSchedulerType or [LRSchedulerType, LRSchedulerType],
-    sp: spm.SentencePieceProcessor,
-    train_dl: torch.utils.data.DataLoader,
-    valid_dl: torch.utils.data.DataLoader,
-    scaler: GradScaler,
-    model_avg: Optional[nn.Module] = None,
-    tb_writer: Optional[SummaryWriter] = None,
-    world_size: int = 1,
-    rank: int = 0,
-    wb = None,
-    online_model = None,
-    rnn_lm = None,
-    p13n_rnn_lm = None,):
-
-    for batch_idx, batch in enumerate(train_dl):
-        with torch.cuda.amp.autocast(enabled=params.use_fp16):
-            batch_l0_grads = compute_loss(
-                params=params,
-                model=model,
-                sp=sp,
-                batch=batch,
-                is_training=True,
-                decode=True if batch_idx % params.decode_interval == 0 else False,
-                online_model=online_model,
-                rnn_lm=rnn_lm,
-                p13n_rnn_lm=p13n_rnn_lm,
-                only_grads=True
-            )
-
-            if batch_idx == 0:
-                l0_grads = batch_l0_grads
-            else:
-                l0_grads = torch.cat((l0_grads, batch_l0_grads), dim=0)
-
-    for batch_idx, batch in enumerate(valid_dl):
-        with torch.cuda.amp.autocast(enabled=params.use_fp16):
-            val_batch_l0_grads = compute_loss(
-                params=params,
-                model=model,
-                sp=sp,
-                batch=batch,
-                is_training=True,
-                decode = True if batch_idx % params.decode_interval == 0 else False,
-                online_model = online_model,
-                rnn_lm = rnn_lm,
-                p13n_rnn_lm = p13n_rnn_lm,
-                only_grads = True
-            )
-            if batch_idx == 0:
-                sum_val_grad = val_batch_l0_grads
-            else:
-                sum_val_grad = torch.cat((sum_val_grad, val_batch_l0_grads), dim=0)
-                
-    return l0_grads, sum_val_grad
-
 def train_one_epoch(
     params: AttributeDict,
     model: Union[nn.Module, DDP],
@@ -1319,9 +1261,6 @@ def train_one_epoch(
     rank: int = 0,
     wb = None,
     online_model = None,
-    rnn_lm = None,
-    p13n_rnn_lm = None,
-    filter_indices = None,
 ) -> None:
     """Train the model for one epoch.
 
@@ -1385,25 +1324,23 @@ def train_one_epoch(
                     is_training=True,
                     decode = True if batch_idx % params.decode_interval == 0 else False,
                     online_model = online_model,
-                    rnn_lm = rnn_lm,
-                    p13n_rnn_lm = p13n_rnn_lm,
                 )
             loss_info.reduce(loss.device)
 
-            # ### loss ratio ###
-            # if data_reg is not None:
-            #     loss_ratio = "loss_ratio" in data_reg.keys()
-            #     if loss_ratio:
-            #         o_loss = data_reg["loss_ratio"]
-            #         curr_loss = loss * params.world_size / loss_info["utterances"]
-            #         o_loss = o_loss * params.world_size / loss_info["utterances"]
-            #         if (curr_loss / o_loss) > 1.017:
-            #             logging.info(
-            #                 f"Current bath loss: {curr_loss}, "
-            #                 f"Previous batch loss {o_loss}, "
-            #                 "Skip current batch for training"
-            #             )
-            #             loss *= 1e-6
+            ### LRDF ###
+            if data_reg is not None:
+                loss_ratio = "loss_ratio" in data_reg.keys()
+                if loss_ratio:
+                    o_loss = data_reg["loss_ratio"]
+                    curr_loss = loss * params.world_size / loss_info["utterances"]
+                    o_loss = o_loss * params.world_size / loss_info["utterances"]
+                    if (curr_loss / o_loss) > 1.017:
+                        logging.info(
+                            f"Current bath loss: {curr_loss}, "
+                            f"Previous batch loss {o_loss}, "
+                            "Skip current batch for training"
+                        )
+                        loss *= 1e-6
 
             numel = params.world_size / (params.accum_grads * loss_info["utterances"])
             loss *= numel ## normalize loss over utts(batch size)
@@ -1858,22 +1795,7 @@ def run(rank, world_size, args, wb=None):
         logging.info("Loading grad scaler state dict")
         scaler.load_state_dict(checkpoints["grad_scaler"])
 
-    # For data selection
-    to_online_model = None
-
     for epoch in range(params.start_epoch, params.num_epochs + 1):
-        # print(list(train_dl.sampler)[0])
-        # for batch_idx, batch in enumerate(train_dl):
-        #     print(batch_idx, len(batch['inputs']))
-        #     batch['forward'] = [1, 3, 5]
-        
-        # train_dl.sampler.set_epoch(20-1)
-        # print(list(train_dl.sampler)[0])
-        # print(list(train_dl.sampler)[100])
-        # for batch_idx, batch in enumerate(train_dl):
-        #     print(batch['forward'])
-        #     exit()
-
         if params.multi_optim:
             scheduler_enc.step_epoch(epoch - 1)
             scheduler_dec.step_epoch(epoch - 1)
@@ -1886,47 +1808,6 @@ def run(rank, world_size, args, wb=None):
             tb_writer.add_scalar("train/epoch", epoch, params.batch_idx_train)
 
         params.cur_epoch = epoch
-
-        if rnn_lm is None and params.lrdf:
-            online_model = copy.deepcopy(to_online_model)
-            to_online_model = copy.deepcopy(model)
-            if online_model is not None:
-                # online_model.eval()
-                for param in online_model.parameters():
-                    param.requires_grad = False
-        else:
-            online_model = None
-
-        if epoch % 5 == 0:
-            trn_gradients, sum_val_grad = compute_gradients(
-                params=params,
-                model=model,
-                model_avg=model_avg,
-                optimizer=optimizer,
-                scheduler=scheduler,
-                sp=sp,
-                train_dl=train_dl,
-                valid_dl=valid_dl,
-                scaler=scaler,
-                tb_writer=tb_writer,
-                world_size=world_size,
-                rank=rank,
-                wb=wb,
-                online_model=online_model,
-                rnn_lm=rnn_lm,
-                p13n_rnn_lm=p13n_rnn_lm,
-            )
-            
-            cos_sims = torch.zeros(len(trn_gradients)).to(device)
-            sum_val_grad = sum_val_grad.mean(dim=0).view(-1) * 1000
-            for i, trn_gradient in enumerate(trn_gradients):
-                trn_gradient = trn_gradient * 1000
-                cos_sims[i] += torch.nn.functional.cosine_similarity(trn_gradient, sum_val_grad, dim=0)
-            
-                filter_th = 0.999
-                filter_indices = cos_sims.sort(descending=True)[1][int(len(cos_sims) * filter_th):]
-        else:
-            filter_indices = None
 
         train_one_epoch(
             params=params,
@@ -1943,9 +1824,6 @@ def run(rank, world_size, args, wb=None):
             rank=rank,
             wb=wb,
             online_model=online_model,
-            rnn_lm=rnn_lm,
-            p13n_rnn_lm=p13n_rnn_lm,
-            filter_indices=filter_indices,
         )
 
         if params.ema_alpha != 1:
