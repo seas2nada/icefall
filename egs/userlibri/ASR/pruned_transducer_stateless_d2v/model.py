@@ -150,38 +150,9 @@ class Transducer(nn.Module):
         boundary[:, 2] = y_lens
         boundary[:, 3] = x_lens
 
-        # calculate lm ratio
-        with torch.no_grad():
-          if p13n_rnn_lm is not None:
-            logits, _ = rnn_lm.module.predict_batch(y, y_lens, sos_id=1, eos_id=1, blank_id=0, return_logits=True)
-            p13n_logits, _ = p13n_rnn_lm.module.predict_batch(y, y_lens, sos_id=1, eos_id=1, blank_id=0, return_logits=True)
-            logits = logits[:,:-1,:]
-            p13n_logits = p13n_logits[:,:-1,:]
-
-            y = y_padded
-            
-            scores = torch.zeros_like(y, dtype=torch.float, device=x.device) # initialize scores tensor for general LM
-            p13n_scores = torch.zeros_like(y, dtype=torch.float, device=x.device) # initialize scores tensor for p13n LM
-            lm_ratio =  torch.zeros(logits.size(0), device=x.device)
-            for batch in range(logits.size(0)):
-              scores[batch] = torch.gather(logits[batch], 1, y[batch].unsqueeze(1)).squeeze(1) # index along 
-              p13n_scores[batch] = torch.gather(p13n_logits[batch], 1, y[batch].unsqueeze(1)).squeeze(1) # index along 
-            
-              # temporal average score
-              lm_ratio[batch] = torch.mean(p13n_scores[batch, :y_lens[batch]] / scores[batch, :y_lens[batch]])
-
-            # normalize lm_ratio
-            max_weight = 4
-            eps = 1e-6
-            min_value = torch.min(lm_ratio)
-            max_value = torch.max(lm_ratio)
-            lm_ratio = max_weight * (lm_ratio - min_value) / (max_value - min_value)
-            lm_ratio += eps
-
         lm = self.simple_lm_proj(decoder_out)
         am = self.simple_am_proj(encoder_out)
 
-        reduction = "sum" if p13n_rnn_lm is None else "none"
         with torch.cuda.amp.autocast(enabled=False):
             simple_loss, (px_grad, py_grad) = k2.rnnt_loss_smoothed(
                 lm=lm.float(),
@@ -191,7 +162,6 @@ class Transducer(nn.Module):
                 lm_only_scale=lm_scale,
                 am_only_scale=am_scale,
                 boundary=boundary,
-                reduction=reduction,
                 return_grad=True,
             )
 
@@ -224,7 +194,6 @@ class Transducer(nn.Module):
                 ranges=ranges,
                 termination_symbol=blank_id,
                 boundary=boundary,
-                reduction=reduction,
             )
         
         if online_model is not None:

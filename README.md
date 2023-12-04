@@ -34,23 +34,39 @@ cd /path/to/icefall/tools
 . ./install_fairseq.sh
 ```
 
-## Training using UserLibri TTS data
+## Prepare data
 1. Place libri_prefinetuned.pt in
 ```
 /path/to/icefall/egs/userlibri/ASR/models
 ```
-2. Unzip UserLibri data in /DB/
-3. Prepare UserLibri data
+2. Place lang_bpe_500 in data
+3. Unzip UserLibri data in /DB/
+4. Prepare UserLibri data recipe
 
+```bash
+cd /path/to/icefall/egs/userlibri/ASR
+. ./prepare.sh
+```
+
+## Training using UserLibri TTS data [Optional]
+Personalize model with userlibri TTS data & inference on test sets
 ```bash
 cd /path/to/icefall/egs/userlibri/ASR
 . ./prepare_tts_gen.sh
-. ./prepare_userlibri.sh
+bash ./run_individual_test_clean_tts.sh
+bash ./run_individual_test_other_tts.sh
 ```
 
-4. Personalize model with userlibri TTS data & inference on test sets
+## Infer with pre-trained models
+1. Place pre-trained models (Ex. if using other_models)
+```bash
+mv other_models /path/to/pruned_transducer_stateless_d2v/pretrained_models
+```
+2. Infer
 ```bash
 cd /path/to/icefall/egs/userlibri/ASR
-. ./run_individual_test_clean_tts.sh
-. ./run_individual_test_other_tts.sh
+sudo chmod -R +777 ./*
+bash infer.sh
+bash avg_wers.sh
 ```
+3. Check decoding_result.txt

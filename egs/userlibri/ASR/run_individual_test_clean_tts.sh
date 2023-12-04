@@ -18,8 +18,12 @@ log() {
   echo -e "$(date '+%Y-%m-%d %H:%M:%S') (${fname}:${BASH_LINENO[0]}:${FUNCNAME[1]}) $*"
 }
 
+rm -rf run.sh
+my_scriptname="$(basename $0)"
+cp -r $my_scriptname run.sh
+
 model_dir=pruned_transducer_stateless_d2v
-ft_model=./$model_dir/models/libri_prefinetuned.pt
+ft_model=$PWD/models/libri_prefinetuned.pt
 # datset: librispeech, ljspeech, userlibri
 train_dataset="userlibri"
 test_dataset="userlibri"
@@ -40,7 +44,7 @@ for bookid in $bookid_list; do
   pn=none
   if [ $stage -le 0 ] && [ $stop_stage -ge 0 ]; then
     log "Stage 0: Train model"
-    ./pruned_transducer_stateless_d2v_dhver/train.py \
+    ./${model_dir}/train.py \
             --wandb False \
             --train-dataset $train_dataset \
             --train-individual $individual \
@@ -53,7 +57,7 @@ for bookid in $bookid_list; do
             --enable-spec-aug False \
             --multi-optim True \
             --start-epoch 1 \
-            --world-size 4 \
+            --world-size 1 \
             --num-epochs $max_epoch \
             --exp-dir $expdir \
             --num-buckets 2 \
@@ -78,7 +82,7 @@ for bookid in $bookid_list; do
             --freeze-encoder $fz_enc \
             --freeze-decoder $fz_dec \
             --freeze-joiner False \
-            --enable-musan True
+            --enable-musan False
       
     mv $expdir/epoch-$max_epoch.pt $expdir/last-epoch.pt
   fi
@@ -87,7 +91,7 @@ for bookid in $bookid_list; do
     log "Stage 1: Decoding"
     for model_name in "last-epoch.pt"; do
       for method in modified_beam_search; do
-          ./pruned_transducer_stateless_d2v_dhver/decode.py \
+          ./${model_dir}/decode.py \
           --test-dataset $test_dataset \
           --decode-individual $individual \
           --gen-pseudo-label False \
@@ -105,7 +109,7 @@ for bookid in $bookid_list; do
           --decoder-dim 768 \
           --joiner-dim 768
       done
-      mv $expdir/$method/wer-summary-$individual-*-$method-*.txt $expdir/$method/wer-$model_name-summary-$individual-$method.txt
+      mv $expdir/$method/wer-summary-$individual-beam_size_4-epoch-30-avg-9-$method-beam-size-4-use-averaged-model.txt $expdir/$method/wer-$model_name-summary-$individual-beam_size_4-epoch-30-avg-9-$method-beam-size-4-use-averaged-model.txt
     done
   fi
 done

@@ -31,7 +31,6 @@ from lhotse.dataset import (  # noqa F401 for PrecomputedFeatures
     DynamicBucketingSampler,
     K2SpeechRecognitionDataset,
     PrecomputedFeatures,
-    SingleCutSampler,
     SpecAugment,
 )
 from lhotse.dataset.input_strategies import (  # noqa F401 For AudioSamples
@@ -304,13 +303,6 @@ class LibriSpeechAsrDataModule:
                 shuffle=self.args.shuffle,
                 num_buckets=self.args.num_buckets,
                 drop_last=self.args.drop_last,
-            )
-        else:
-            logging.info("Using SingleCutSampler.")
-            train_sampler = SingleCutSampler(
-                cuts_train,
-                max_duration=self.args.max_duration,
-                shuffle=self.args.shuffle,
             )
         logging.info("About to create train dataloader")
 
@@ -696,13 +688,6 @@ class UserLibriAsrDataModule:
                 shuffle=self.args.shuffle,
                 num_buckets=self.args.num_buckets,
                 drop_last=self.args.drop_last,
-            )
-        else:
-            logging.info("Using SingleCutSampler.")
-            train_sampler = SingleCutSampler(
-                cuts_train,
-                max_duration=self.args.max_duration,
-                shuffle=self.args.shuffle,
             )
         logging.info("About to create train dataloader")
 
@@ -1105,13 +1090,6 @@ class LJSpeechAsrDataModule:
                 num_buckets=self.args.num_buckets,
                 drop_last=self.args.drop_last,
             )
-        else:
-            logging.info("Using SingleCutSampler.")
-            train_sampler = SingleCutSampler(
-                cuts_train,
-                max_duration=self.args.max_duration,
-                shuffle=self.args.shuffle,
-            )
         logging.info("About to create train dataloader")
 
         if sampler_state_dict is not None:
@@ -1469,13 +1447,6 @@ class L2ArcticAsrDataModule:
                 shuffle=self.args.shuffle,
                 num_buckets=self.args.num_buckets,
                 drop_last=self.args.drop_last,
-            )
-        else:
-            logging.info("Using SingleCutSampler.")
-            train_sampler = SingleCutSampler(
-                cuts_train,
-                max_duration=self.args.max_duration,
-                shuffle=self.args.shuffle,
             )
         logging.info("About to create train dataloader")
 

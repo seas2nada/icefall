@@ -72,26 +72,40 @@ log "dl_dir: $dl_dir"
 # |   |-- $tid
 # |       |-- $tid_$uid.wav
 
+if [ ! -d $dl_dir/musan ]; then
+  lhotse download musan $dl_dir
+fi
+
 if [ $stage -le 1 ] && [ $stop_stage -ge 1 ]; then
   log "Stage 1: Prepare UserLibri manifest"
   # We assume that you have downloaded the UserLibri corpus
   # to $dl_dir/UserLibri
   mkdir -p data/manifests
-  if [ ! -e data/manifests/.tts_gen.done ]; then
+  if [ ! -e data/manifests/.${gen_dir}.done ]; then
     python prepare_tts_gen.py $dl_dir/UserLibri $gen_dir
-    touch data/manifests/.tts_gen.done
+    touch data/manifests/.${gen_dir}.done
+  fi
+  
+  if [ ! -e data/manifests/.musan.done ]; then
+    lhotse prepare musan $dl_dir/musan data/manifests
+    touch data/manifests/.musan.done
   fi
 fi
 
 if [ $stage -le 2 ] && [ $stop_stage -ge 2 ]; then
   log "Stage 2: Compute fbank for userlibri"
   mkdir -p data/fbank
-  if [ ! -e data/fbank/.tts_gen.done ]; then
+  if [ ! -e data/fbank/.${gen_dir}.done ]; then
     ./local/compute_fbank_tts_gen.py --data-dir $dl_dir/UserLibri --gen-dir $gen_dir
-    touch data/fbank/.tts_gen.done
+    touch data/fbank/.${gen_dir}.done
   fi
 
-  if [ ! -e data/fbank/.userlibri-validated.done ]; then
+  if [ ! -e data/fbank/.musan.done ]; then
+    ./local/compute_fbank_musan.py
+    touch data/fbank/.musan.done
+  fi
+
+  if [ ! -e data/fbank/.${gen_dir}-validated.done ]; then
     log "Validating data/fbank for speaker-wise userlibri"
     parts=`ls $dl_dir/UserLibri/$gen_dir --ignore "*.txt"`
     for part in ${parts[@]}; do

@@ -21,3 +21,5 @@ icefall_dir=$PWD
 echo 'export PYTHONPATH=$PYTHONPATH:'$icefall_dir >> ~/.bashrc
 echo 'export PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python' >> ~/.bashrc
 source ~/.bashrc
+
+pip install wandb

@@ -246,25 +246,6 @@ def add_rep_arguments(parser: argparse.ArgumentParser):
         type=str,
         default='userlibri',
     )
-
-    parser.add_argument(
-        "--gen-rnn-lm-exp-dir",
-        type=str,
-        default=None,
-    )
-    
-    parser.add_argument(
-        "--p13n-rnn-lm-exp-dir",
-        type=str,
-        default=None,
-    )
-
-    parser.add_argument(
-        "--lrdf",
-        type=str2bool,
-        default=False,
-        help="loss ratio based data filtering",
-    )
         
 
 def add_model_arguments(parser: argparse.ArgumentParser):
@@ -915,9 +896,6 @@ def compute_loss(
     is_training: bool,
     decode: bool = False,
     online_model = None,
-    rnn_lm = None,
-    p13n_rnn_lm = None,
-    only_grads = False,
 ) -> Tuple[Tensor, MetricsTracker]:
     """
     Compute transducer loss given the model and its inputs.
@@ -997,20 +975,6 @@ def compute_loss(
     token_ids = sp.encode(texts, out_type=int)
     y = k2.RaggedTensor(token_ids).to(device)
 
-    if only_grads:
-        return model(
-            x=feature,
-            x_lens=feature_lens,
-            y=y,
-            prune_range=params.prune_range,
-            am_scale=params.am_scale,
-            lm_scale=params.lm_scale,
-            online_model=online_model if is_training else None,
-            rnn_lm=rnn_lm if is_training else None,
-            p13n_rnn_lm=p13n_rnn_lm if is_training else None,
-            only_grads = True
-        )
-
     with torch.set_grad_enabled(is_training):
         simple_loss, pruned_loss, ctc_output, data_reg = model(
             x=feature,
@@ -1020,8 +984,6 @@ def compute_loss(
             am_scale=params.am_scale,
             lm_scale=params.lm_scale,
             online_model=online_model if is_training else None,
-            rnn_lm=rnn_lm if is_training else None,
-            p13n_rnn_lm=p13n_rnn_lm if is_training else None,
         )
 
         s = params.simple_loss_scale
@@ -1047,10 +1009,6 @@ def compute_loss(
                 o_loss = simple_loss_scale * o_losses[0] + pruned_loss_scale * o_losses[1]
                 o_loss = o_loss.detach().cpu().item()
                 data_reg = {"loss_ratio" : o_loss}
-            elif isinstance(data_reg, torch.Tensor):
-                reduction = "none"
-                lm_ratio = data_reg
-                data_reg = {"lm_ratio" : lm_ratio}
             else:
                 if is_training:
                     raise NotImplementedError("undefined data regularization method")
@@ -1086,9 +1044,10 @@ def compute_loss(
             reduction=reduction,
             use_double_scores=params.use_double_scores,
         )
+        
         if reduction == "none":
-            ctc_loss *= data_reg["lm_ratio"]
             ctc_loss = ctc_loss.sum()
+            
         assert ctc_loss.requires_grad == is_training
         loss += params.ctc_loss_scale * ctc_loss
     
@@ -1272,9 +1231,6 @@ def train_one_epoch(
         scheduler_enc, scheduler_dec = scheduler[0], scheduler[1]
 
     for batch_idx, batch in enumerate(train_dl):
-        if filter_indices is not None and batch_idx in filter_indices:
-            continue
-
         if batch_idx < cur_batch_idx:
             continue
         cur_batch_idx = batch_idx
@@ -1557,43 +1513,10 @@ def run(rank, world_size, args, wb=None):
 
     model.to(device)
     
-    # prepare language model for lm ratio
-    rnn_lm = None
-    p13n_rnn_lm = None
-    if params.p13n_rnn_lm_exp_dir is not None:
-        
-        assert params.gen_rnn_lm_exp_dir is not None
-
-        rnn_lm = RnnLmModel(
-            vocab_size=500,
-            embedding_dim=2048,
-            hidden_dim=2048,
-            num_layers=3,
-            tie_weights=False,
-        )
-        rnn_lm.load_state_dict(torch.load(params.gen_rnn_lm_exp_dir)['model'])
-        rnn_lm.to(device)
-        rnn_lm.eval()
-
-        p13n_rnn_lm = RnnLmModel(
-            vocab_size=500,
-            embedding_dim=2048,
-            hidden_dim=2048,
-            num_layers=3,
-            tie_weights=False,
-        )
-        p13n_rnn_lm.load_state_dict(torch.load(params.p13n_rnn_lm_exp_dir)['model'])
-        p13n_rnn_lm.to(device)
-        p13n_rnn_lm.eval()
-
     if world_size > 1:
         logging.info("Using DDP")
         model = DDP(model, device_ids=[rank], find_unused_parameters=True)
 
-        if p13n_rnn_lm is not None:
-            p13n_rnn_lm = DDP(p13n_rnn_lm, device_ids=[rank])
-            rnn_lm = DDP(rnn_lm, device_ids=[rank])
-    
     if params.multi_optim:
         logging.info("Using seperate optimizers over encoder, decoder ...")
 
@@ -1763,6 +1686,8 @@ def run(rank, world_size, args, wb=None):
         logging.info("Loading grad scaler state dict")
         scaler.load_state_dict(checkpoints["grad_scaler"])
 
+    to_online_model = None
+
     for epoch in range(params.start_epoch, params.num_epochs + 1):
         if params.multi_optim:
             scheduler_enc.step_epoch(epoch - 1)
@@ -1776,6 +1701,13 @@ def run(rank, world_size, args, wb=None):
             tb_writer.add_scalar("train/epoch", epoch, params.batch_idx_train)
 
         params.cur_epoch = epoch
+
+        online_model = copy.deepcopy(to_online_model)
+        to_online_model = copy.deepcopy(model)
+        if online_model is not None:
+            # online_model.eval()
+            for param in online_model.parameters():
+                param.requires_grad = False
 
         train_one_epoch(
             params=params,
