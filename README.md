@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 <div align="center">
 <img src="https://raw.githubusercontent.com/k2-fsa/icefall/master/docs/source/_static/logo.png" width=168>
 </div>
@@ -85,10 +86,23 @@ We would like to highlight the performance of some of the recipes here.
 
 This is the simplest ASR recipe in `icefall` and can be run on CPU.
 Training takes less than 30 seconds and gives you the following WER:
+=======
+## HYnet ver. Icefall Installation
+>>>>>>> 8cdd10d86ffa2d14ee985afdbb2ee13612aa61b0
 
+### Install docker (Optional)
+```bash
+cd /path/to/icefall/docker/HYnet_docker
+make _build
+make run
 ```
-[test_set] %WER 0.42% [1 / 240, 0 ins, 1 del, 0 sub ]
+
+### Login to icefall docker (Optional)
+```bash
+ssh icefall@localhost -p 32778
+PW: if2022
 ```
+<<<<<<< HEAD
 We provide a Colab notebook for this recipe: [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1tIjjzaJc3IvGyKiMCDWO-TSnBgkcuN3B?usp=sharing)
 
 
@@ -377,3 +391,63 @@ Please see: [![Open In Colab](https://colab.research.google.com/assets/colab-bad
 
 [vctk]: egs/vctk/TTS
 [ljspeech]: egs/ljspeech/TTS
+=======
+
+### Install icefall
+```bash
+cd /path/to/icefall/tools
+. ./install_icefall.sh
+```
+
+### Check icefall installation
+```bash
+cd /path/to/icefall/tools
+. ./check_install.sh
+```
+
+### Install toolkits
+```bash
+cd /path/to/icefall/tools
+. ./install_espnet.sh
+
+cd /path/to/icefall/tools
+. ./install_fairseq.sh
+```
+
+## Prepare data
+1. Place libri_prefinetuned.pt in
+```
+/path/to/icefall/egs/userlibri/ASR/models
+```
+2. Place lang_bpe_500 in data
+3. Unzip UserLibri data in /DB/
+4. Prepare UserLibri data recipe
+
+```bash
+cd /path/to/icefall/egs/userlibri/ASR
+. ./prepare.sh
+```
+
+## Training using UserLibri TTS data [Optional]
+Personalize model with userlibri TTS data & inference on test sets
+```bash
+cd /path/to/icefall/egs/userlibri/ASR
+. ./prepare_tts_gen.sh
+bash ./run_individual_test_clean_tts.sh
+bash ./run_individual_test_other_tts.sh
+```
+
+## Infer with pre-trained models
+1. Place pre-trained models (Ex. if using other_models)
+```bash
+mv other_models /path/to/pruned_transducer_stateless_d2v/pretrained_models
+```
+2. Infer
+```bash
+cd /path/to/icefall/egs/userlibri/ASR
+sudo chmod -R +777 ./*
+bash infer.sh
+bash avg_wers.sh
+```
+3. Check decoding_result.txt
+>>>>>>> 8cdd10d86ffa2d14ee985afdbb2ee13612aa61b0
