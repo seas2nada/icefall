@@ -32,7 +32,7 @@ perturb_speed=true
 #     - noise
 #     - speech
 
-dl_dir=$PWD/download
+dl_dir=/home/ubuntu/Workspace/DB/LibriSpeech/icefall_downloads
 
 . shared/parse_options.sh || exit 1
 
@@ -378,7 +378,7 @@ if [ $stage -le 12 ] && [ $stop_stage -ge 12 ]; then
 fi
 
 # whisper large-v3 using 128 mel bins, others using 80 mel bins
-whisper_mel_bins=80
+whisper_mel_bins=128
 output_dir=data/fbank_whisper
 if [ $stage -le 30 ] && [ $stop_stage -ge 30 ]; then
   log "Stage 30: Compute ${whisper_mel_bins} dim fbank for whisper model fine-tuning"

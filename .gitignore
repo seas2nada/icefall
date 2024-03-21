@@ -36,3 +36,10 @@ node_modules
 .DS_Store
 *.fst
 *.arpa
+
+*exp*
+
+tools/Miniconda*
+tools/venv
+tools/k2
+tools/activate_python.sh
